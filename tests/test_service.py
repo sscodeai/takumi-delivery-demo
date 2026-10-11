@@ -9,6 +9,7 @@ in-process function.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -291,6 +292,18 @@ class RowOrderTests(unittest.TestCase):
 class EndpointContractTests(unittest.TestCase):
     """REQ-001/REQ-002: the service stays up, is reached over HTTP and is bounded."""
 
+    def test_the_declared_url_answers_json(self):
+        # REQ-001: the declared URL (http://127.0.0.1:{port}/summary) answers
+        # 200 with a JSON content type, not a printed text table.
+        with running_service(SAMPLE) as service:
+            with urllib.request.urlopen(service.url, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn(
+                    "application/json", response.headers.get("Content-Type", "")
+                )
+                body = response.read().decode("utf-8")
+            json.loads(body)
+
     def test_the_service_does_not_exit_after_answering(self):
         with running_service(SAMPLE) as service:
             self.assertEqual(service.request_status(), 200)
@@ -413,6 +426,72 @@ class RequirementDocumentTests(unittest.TestCase):
         self.assertIn('run: "bash serve.sh {csv} {port}"', text)
         self.assertIn('read: "curl -fsS {url}"', text)
         self.assertIn("timeoutMs: 120000", text)
+
+    def test_the_document_bounds_the_start_and_serve_command(self):
+        # `bash serve.sh {csv} {port}` never exits on its own (REQ-002), so the
+        # document must declare a bound; without one a judge waits for ever.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        doc = os.path.join(root, "docs", "requirements", "service-station-summary.yaml")
+        with open(doc, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        deliverable = text.split("\ndeliverable:", 1)[1]
+        timeout = re.search(r"(?m)^  timeoutMs: ([0-9]+)$", deliverable)
+        self.assertIsNotNone(timeout, "the deliverable must declare a timeoutMs bound")
+        self.assertGreater(int(timeout.group(1)), 0)
+
+
+class OfflineOperationTests(unittest.TestCase):
+    """REQ-007: the service runs with no network access and makes no outbound call."""
+
+    def test_the_same_summary_is_served_with_outbound_networking_blocked(self):
+        blocked = dict(os.environ)
+        blocked.update(
+            {
+                "HTTP_PROXY": "http://127.0.0.1:9",
+                "HTTPS_PROXY": "http://127.0.0.1:9",
+                "http_proxy": "http://127.0.0.1:9",
+                "https_proxy": "http://127.0.0.1:9",
+                "NO_PROXY": "",
+                "no_proxy": "",
+            }
+        )
+        with running_service(SAMPLE) as baseline:
+            baseline_body = baseline.body()
+        with running_service(SAMPLE, env=blocked) as offline:
+            offline_body = offline.body()
+        self.assertEqual(offline_body, baseline_body)
+
+    def test_the_offline_body_is_still_the_declared_summary(self):
+        blocked = dict(os.environ)
+        blocked.update(
+            {
+                "HTTP_PROXY": "http://127.0.0.1:9",
+                "HTTPS_PROXY": "http://127.0.0.1:9",
+                "http_proxy": "http://127.0.0.1:9",
+                "https_proxy": "http://127.0.0.1:9",
+                "NO_PROXY": "",
+            }
+        )
+        with running_service(SAMPLE, env=blocked) as service:
+            self.assertEqual(service.request_status(), 200)
+            objects, skipped, total = service.report()
+            self.assertEqual(total, expected_total(SAMPLE))
+            self.assertEqual(skipped, expected_skipped(SAMPLE))
+            self.assertEqual({obj["station"]: obj for obj in objects}, expected_stations(SAMPLE))
+
+    def test_the_service_makes_no_outbound_network_import(self):
+        # The service binds 127.0.0.1 with http.server and never imports an
+        # outbound HTTP client, so it cannot reach the network even when one is
+        # available.  http.server is the inbound listener and is allowed.
+        service_source = os.path.join(ROOT, "station_summary.py")
+        with open(service_source, "r", encoding="utf-8") as handle:
+            source = handle.read()
+        for module in ("http.client", "requests", "ftplib", "smtplib", "telnetlib"):
+            self.assertNotRegex(
+                source, r"(?m)^\s*(?:import|from)\s+%s\b" % re.escape(module)
+            )
+        self.assertNotIn("urllib.request", source)
+        self.assertNotIn("urlopen", source)
 
 
 class PerformanceTests(unittest.TestCase):

@@ -115,15 +115,20 @@ def parse_body(body):
 
 
 @contextmanager
-def running_service(text, wait_seconds=20):
-    """Write ``text`` to a CSV and yield a started service over it."""
+def running_service(text, wait_seconds=20, env=None):
+    """Write ``text`` to a CSV and yield a started service over it.
+
+    ``env`` overrides the environment the service process is started with, so a
+    test can assert the summary is unchanged when outbound networking is
+    unavailable (REQ-007).
+    """
     handle = tempfile.NamedTemporaryFile(
         "w", suffix=".csv", delete=False, encoding="utf-8", newline=""
     )
     try:
         handle.write(text)
         handle.close()
-        service = Service(handle.name, wait_seconds=wait_seconds)
+        service = Service(handle.name, wait_seconds=wait_seconds, env=env)
         try:
             yield service
         finally:
@@ -135,7 +140,7 @@ def running_service(text, wait_seconds=20):
 class Service:
     """The delivered service, started the way the requirement document declares."""
 
-    def __init__(self, path, wait_seconds=20):
+    def __init__(self, path, wait_seconds=20, env=None):
         self.path = path
         self.port = free_port()
         self.proc = subprocess.Popen(
@@ -144,6 +149,7 @@ class Service:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            env=env,
         )
         try:
             self._wait_for_url(wait_seconds)
