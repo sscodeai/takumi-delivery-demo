@@ -246,6 +246,31 @@ class DeclaredSurfaceTests(unittest.TestCase):
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn("port", bad.stderr.lower())
 
+    def test_out_of_range_port_is_rejected_before_serving(self):
+        for port in ("0", "70000"):
+            with self.subTest(port=port):
+                result = subprocess.run(
+                    ["bash", SERVE, os.path.join(ROOT, "whatever.csv"), port],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                # serve.sh validates the bound before it execs the service, so
+                # no socket is bound and no process is left behind.
+                self.assertIn("out of range", result.stderr.lower())
+
+    def test_missing_input_file_exits_nonzero_with_stderr(self):
+        result = subprocess.run(
+            ["bash", SERVE, os.path.join(ROOT, "does-not-exist.csv"), str(free_port())],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read", result.stderr.lower())
+
     def test_two_services_on_different_ports_are_independent(self):
         with service(SAMPLE) as first, service(HEADER + "2024-01-01,ONLY,1.0\n") as second:
             first_objects = first.station_objects()
