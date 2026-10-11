@@ -2,7 +2,7 @@
 # delivered project's OWN tests, not takumi's, so a green pipeline is evidence about THIS delivery.
 # A repair round may rewrite it; a human reads it in the delivery.
 # dialect: github (.github/workflows/ci.yml)
-# requirement: docs/requirements/intake.yaml
+# requirement: docs/requirements/service-station-summary.yaml
 name: ci
 on:
   push:
@@ -14,6 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: run the delivered project's own tests
         run: |
+          set -o pipefail
           if [ -f package.json ]; then pnpm test 2>&1 | tail -60;
           elif [ -f run-tests.sh ]; then bash run-tests.sh 2>&1 | tail -60;
           elif ls *.test.mjs >/dev/null 2>&1; then node --test *.test.mjs 2>&1 | tail -60;
@@ -31,6 +32,41 @@ jobs:
           2024-01-02,BRAVO,-1.5
           2024-01-03,ALPHA,9.5
           TAKUMI_SAMPLE
-      - name: run the deliverable as the requirement document declares
+      - name: start the service on a free port and assert the declared response
         run: |
-          bash summary.sh takumi-sample.csv
+          set -euo pipefail
+          timeout 120s bash -c '
+            set -euo pipefail
+            port=$(python3 -c '\''import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'\'')
+            bash serve.sh takumi-sample.csv "$port" >/tmp/station-service.log 2>&1 &
+            service_pid=$!
+            trap "kill \"$service_pid\" 2>/dev/null || true" EXIT
+            url="http://127.0.0.1:${port}/summary"
+            answered=""
+            for _ in $(seq 1 240); do
+              if ! kill -0 "$service_pid" 2>/dev/null; then
+                echo "the service exited before answering on ${url}" >&2
+                cat /tmp/station-service.log >&2 || true
+                exit 1
+              fi
+              if body=$(curl -fsS --max-time 2 "$url" 2>/dev/null); then
+                answered="$body"
+                break
+              fi
+              sleep 0.25
+            done
+            if [ -z "$answered" ]; then
+              echo "the service did not answer on ${url} within 60s" >&2
+              cat /tmp/station-service.log >&2 || true
+              exit 1
+            fi
+            printf "%s\n" "$answered"
+            printf "%s\n" "$answered" >/tmp/station-summary.json
+            python3 -c '\''import json,sys; body=open("/tmp/station-summary.json").read(); doc=json.loads(body); assert any("station" in o for o in doc), "no station object"; assert {"skipped": 0} in doc, "no skipped object"; assert {"total": 5} in doc, "no/wrong total object"'\''
+          ' || {
+            rc=$?
+            if [ "$rc" = 124 ]; then
+              echo 'the deliverable smoke test did not finish within 120s and was killed, so this job fails instead of waiting out the runner' >&2
+            fi
+            exit "$rc"
+          }
