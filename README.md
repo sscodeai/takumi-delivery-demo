@@ -4,7 +4,9 @@ Demonstration target for takumi's black-box delivery mode: a confirmed
 requirement becomes a delivered product through an independently forged judge, a
 pull request, an issue, a pipeline, and a merge.
 
-## The delivered tool: `summary.sh`
+## The delivered tools
+
+### `summary.sh`, the script shape
 
 `summary.sh` summarises a daily temperature CSV export. It is a Bash entry point
 around a Python 3 standard-library program; it reads one local file, writes the
@@ -48,8 +50,10 @@ Station lines are emitted in ascending byte-wise station id order.
 
 ### Decisions
 
-The confirmed requirement document (`docs/requirements/intake.yaml`) settled
-five ambiguities; the tool honours all of them:
+The script's confirmed requirement document (`docs/requirements/intake.yaml`)
+settled five ambiguities; the tool honours all of them, and the service
+delivered against `docs/requirements/service-station-summary.yaml` honours the
+same chosen options:
 
 | Decision | Chosen option | Behaviour |
 | --- | --- | --- |
@@ -76,6 +80,38 @@ exact integer arithmetic, so the half-away-from-zero rule is not distorted by
 binary floating point. The tool is fast: a 200,000-row fixture runs in well under
 a second here.
 
+### The service shape: `serve.sh`
+
+`serve.sh` is the HTTP service shape of the same summary. It starts a
+localhost-only server around the Python 3 standard-library program in
+`station_service.py`, reads one CSV at start-up and serves the report at
+`/summary`.
+
+```sh
+bash serve.sh readings.csv 8731
+# in another shell:
+curl -fsS http://127.0.0.1:8731/summary
+```
+
+The report is one declared output line per JSON object, in ascending byte-wise
+station id order, followed by the skipped count and the total:
+
+```text
+{"station":"ALPHA","count":3,"min":9.5,"max":11.6,"mean":10.5}
+{"station":"BRAVO","count":2,"min":-2.5,"max":-1.5,"mean":-2.0}
+{"skipped":0}
+{"total":5}
+```
+
+Each line is the compact JSON object the requirement document declares in its
+``output_format`` shapes, so the whole response body is JSON lines.
+
+The service honours the same confirmed decisions as `summary.sh`: AMB-001
+skip-count, AMB-002 merge, AMB-003 half-up rounding, AMB-004 ascending
+byte-wise station order and AMB-005 valid-only total. It binds `127.0.0.1`,
+makes no outbound network call, keeps the report in memory and answers
+`GET /summary` with HTTP 200 `application/json`; every other path answers 404.
+
 ## Tests
 
 ```sh
@@ -85,11 +121,15 @@ bash run-tests.sh
 The suite drives the real entry point through a process boundary and checks it
 against an independent reference implementation
 (`tests/reference.py`, exact `Fraction` arithmetic) plus a randomized
-permutation/differential property suite. It covers every requirement and every
-confirmed decision in `docs/requirements/intake.yaml`.
+permutation/differential property suite, and `tests/test_service.py` starts the
+HTTP service through the same process boundary and parses the declared output
+lines it serves. Together they cover every requirement and every confirmed
+decision in `docs/requirements/intake.yaml` and
+`docs/requirements/service-station-summary.yaml`.
 
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs the delivered project's own tests
-(`bash run-tests.sh`) and invokes the deliverable on the requirement document's
-sample input (`bash summary.sh takumi-sample.csv`).
+(`bash run-tests.sh`) and starts the service on the requirement document's
+sample input, waits for `/summary` to answer, and asserts the response carries
+the declared `"total"` line before it stops the service.

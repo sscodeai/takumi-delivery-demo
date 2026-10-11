@@ -2,7 +2,7 @@
 # delivered project's OWN tests, not takumi's, so a green pipeline is evidence about THIS delivery.
 # A repair round may rewrite it; a human reads it in the delivery.
 # dialect: github (.github/workflows/ci.yml)
-# requirement: docs/requirements/intake.yaml
+# requirement: docs/requirements/service-station-summary.yaml
 name: ci
 on:
   push:
@@ -14,6 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: run the delivered project's own tests
         run: |
+          set -o pipefail
           if [ -f package.json ]; then pnpm test 2>&1 | tail -60;
           elif [ -f run-tests.sh ]; then bash run-tests.sh 2>&1 | tail -60;
           elif ls *.test.mjs >/dev/null 2>&1; then node --test *.test.mjs 2>&1 | tail -60;
@@ -31,6 +32,33 @@ jobs:
           2024-01-02,BRAVO,-1.5
           2024-01-03,ALPHA,9.5
           TAKUMI_SAMPLE
-      - name: run the deliverable as the requirement document declares
+      - name: start the deliverable as the requirement document declares and assert its response
         run: |
-          bash summary.sh takumi-sample.csv
+          set -euo pipefail
+          port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          url="http://127.0.0.1:${port}/summary"
+          bash serve.sh takumi-sample.csv "$port" &
+          service_pid="$!"
+          # Always stop the surface, on every path: a leaked service would answer a later check.
+          trap 'kill "$service_pid" 2>/dev/null || true' EXIT
+          body=""
+          for _ in $(seq 1 100); do
+            if body="$(curl -fsS "$url" 2>/dev/null)"; then
+              break
+            fi
+            if ! kill -0 "$service_pid" 2>/dev/null; then
+              echo "the deliverable exited before answering on $url" >&2
+              exit 1
+            fi
+            sleep 0.1
+          done
+          if [ -z "$body" ]; then
+            echo "the deliverable did not answer on $url within 10s" >&2
+            exit 1
+          fi
+          printf '%s\n' "$body"
+          expected_station='{"station":"ALPHA","count":3,"min":9.5,"max":11.6,"mean":10.5}'
+          expected_total='{"total":5}'
+          printf '%s\n' "$body" | grep -qF '"total"'
+          printf '%s\n' "$body" | grep -qxF "$expected_station"
+          printf '%s\n' "$body" | grep -qxF "$expected_total"
