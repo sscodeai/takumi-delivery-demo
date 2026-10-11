@@ -7,6 +7,8 @@ import unittest
 
 from helpers import HEADER, ROOT, SCRIPT, run_csv
 
+RUNNER = os.path.join(ROOT, "run-tests.sh")
+
 
 class EntryPointTests(unittest.TestCase):
     def test_script_exists_at_repository_root(self):
@@ -64,3 +66,26 @@ class EntryPointTests(unittest.TestCase):
         result = run_csv(HEADER + "2024-01-01,ALPHA,1.0\n", cwd=os.path.dirname(ROOT))
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "ALPHA 1 1.0 1.0 1.0\nSKIPPED 0\nTOTAL 1\n")
+
+
+class TestRunnerEntryTests(unittest.TestCase):
+    """The suite is only useful if the smoke gate can invoke it."""
+
+    def test_runner_exists_and_is_readable_at_repository_root(self):
+        self.assertTrue(os.path.isfile(RUNNER))
+        self.assertTrue(os.access(RUNNER, os.R_OK))
+
+    def test_runner_is_valid_bash(self):
+        result = subprocess.run(
+            ["bash", "-n", RUNNER], cwd=ROOT, capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_runner_exposes_the_suite_to_the_smoke_gate(self):
+        # A discoverable runner must point the gate at this suite; it must not
+        # silently succeed without running anything. Invoking it here would
+        # recurse, so assert it discovers test_*.py under tests/ instead.
+        with open(RUNNER, "r", encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("unittest", source)
+        self.assertIn("tests", source)
