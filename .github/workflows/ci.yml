@@ -29,6 +29,8 @@ jobs:
           2024-01-01,ALPHA,10.4
           2024-01-01,BRAVO,-2.5
           2024-01-02,ALPHA,11.6
+          2024-01-02,BRAVO,-1.5
+          2024-01-03,ALPHA,9.5
           TAKUMI_SAMPLE
       - name: run the deliverable as the requirement document declares
         run: |
@@ -40,6 +42,17 @@ jobs:
             fi
             exit "$rc"
           }
+      - name: check the deliverable's exact report for the declared world
+        run: |
+          set -o pipefail
+          bash summary.sh takumi-sample.csv > report.txt
+          cat > expected.txt <<'TAKUMI_EXPECTED'
+          ALPHA 3 9.5 11.6 10.5
+          BRAVO 2 -2.5 -1.5 -2.0
+          SKIPPED 0
+          TOTAL 5
+          TAKUMI_EXPECTED
+          diff -u expected.txt report.txt
   mutation:
     runs-on: ubuntu-latest
     steps:
