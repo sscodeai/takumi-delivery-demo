@@ -165,8 +165,15 @@ measured nothing cannot look green.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the delivered project's own tests
-(`bash run-tests.sh`) and runs the deliverable exactly as the requirement
-document declares it (`bash summary.sh <sample>`). The delivered command is
-bounded with `timeout`, so a tool that never exits fails the job instead of
-waiting out the runner's limit.
+`.github/workflows/ci.yml` is the delivery's pipeline and has three jobs:
+
+- `tests` runs the delivered project's own suite (`bash run-tests.sh`);
+- `deliverable` feeds the tool the exact world the requirement document
+declares, runs it as `bash summary.sh takumi-sample.csv` under a `timeout`, and
+diffs the printed report against the declared `ALPHA`/`BRAVO`/`SKIPPED`/`TOTAL`
+lines; and
+- `mutation` runs the declared mutation gate (`bash mutation.sh`), which must
+record zero survivors on `reports/mutation/survivors.json`.
+
+The delivered command is bounded with `timeout`, so a tool that never exits
+fails the job instead of waiting out the runner's limit.

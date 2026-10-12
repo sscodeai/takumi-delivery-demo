@@ -34,7 +34,10 @@ import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import unittest
+from unittest import mock
 
 from helpers import ROOT, SCRIPT
 
@@ -201,6 +204,129 @@ class MutationContractTests(unittest.TestCase):
             )
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+
+class MutationConcurrencyUnitTests(unittest.TestCase):
+    """Unit tests for the previous step's concurrent mutant runner.
+
+    The perf step split the sequential per-mutant loop into
+    ``mutation_workers``/``run_mutation``/``run_mutations`` so mutants run in
+    parallel against private copies. Those helpers are pinned here directly so
+    a regression that serialises the pool, drops a verdict, reorders the report
+    or shares one copy is caught without paying for a full mutation run. This
+    module is excluded from the mutation gate itself, so the extra checks cost
+    the gate nothing.
+    """
+
+    def setUp(self):
+        self.harness = load_harness()
+
+    def test_mutation_workers_is_bounded_by_pending_mutants_and_the_cap(self):
+        self.assertEqual(self.harness.mutation_workers(0), 1)
+        for count in range(1, 9):
+            with self.subTest(count=count):
+                workers = self.harness.mutation_workers(count)
+                self.assertGreaterEqual(workers, 1)
+                self.assertLessEqual(workers, count)
+        # A catalogue far larger than any runner is capped, never unbounded.
+        self.assertLessEqual(self.harness.mutation_workers(10000), 8)
+
+    def test_mutation_workers_honours_the_cpu_count(self):
+        with mock.patch.object(self.harness.os, "cpu_count", return_value=2):
+            self.assertEqual(self.harness.mutation_workers(100), min(100, 4, 8))
+        # A platform that cannot report the core count still gets a usable pool.
+        with mock.patch.object(self.harness.os, "cpu_count", return_value=None):
+            self.assertEqual(self.harness.mutation_workers(100), min(100, 3, 8))
+
+    def test_run_mutations_short_circuits_an_empty_catalogue(self):
+        def explode(*_args):
+            raise AssertionError("run_mutation must not be called for no mutants")
+
+        self.harness.run_mutation = explode
+        with tempfile.TemporaryDirectory() as work_root:
+            self.assertEqual(
+                self.harness.run_mutations("pristine", [], work_root), []
+            )
+
+    def test_run_mutations_returns_verdicts_in_input_order(self):
+        mutations = [
+            {"id": "slow", "old": "a", "new": "b"},
+            {"id": "fast", "old": "c", "new": "d"},
+            {"id": "middle", "old": "e", "new": "f"},
+        ]
+        delays = {"slow": 0.20, "fast": 0.0, "middle": 0.05}
+
+        def delayed(_pristine, mutation, _work_root):
+            time.sleep(delays[mutation["id"]])
+            return mutation["id"] == "middle"
+
+        self.harness.run_mutation = delayed
+        with tempfile.TemporaryDirectory() as work_root:
+            outcomes = self.harness.run_mutations("pristine", mutations, work_root)
+        # Completion order is fast, middle, slow; the report order must stay the
+        # catalogue order so the survivors list is deterministic.
+        self.assertEqual(outcomes, [False, False, True])
+
+    def test_run_mutations_overlaps_the_mutants(self):
+        mutations = [
+            {"id": "m%d" % index, "old": "a", "new": "b"} for index in range(4)
+        ]
+        rendezvous = threading.Barrier(len(mutations))
+        timeouts = []
+
+        def wait_for_peers(_pristine, mutation, _work_root):
+            try:
+                rendezvous.wait(timeout=10)
+            except threading.BrokenBarrierError:
+                timeouts.append(mutation["id"])
+            return True
+
+        self.harness.mutation_workers = lambda count: len(mutations)
+        self.harness.run_mutation = wait_for_peers
+        with tempfile.TemporaryDirectory() as work_root:
+            outcomes = self.harness.run_mutations("pristine", mutations, work_root)
+        self.assertEqual(timeouts, [], "mutants did not run concurrently")
+        self.assertEqual(outcomes, [True] * len(mutations))
+
+    def test_run_mutations_gives_every_mutant_a_private_mutated_copy(self):
+        mutations = [
+            {
+                "id": "first",
+                "old": "if len(row) != 3:",
+                "new": "if len(row) < 3:",
+            },
+            {
+                "id": "second",
+                "old": "entry[3] += value",
+                "new": "entry[3] -= value",
+            },
+        ]
+        with open(SCRIPT, encoding="utf-8") as handle:
+            pristine = handle.read()
+        copies = {}
+
+        def capture(worktree):
+            with open(
+                os.path.join(worktree, "summary.sh"), encoding="utf-8"
+            ) as handle:
+                copies[worktree] = handle.read()
+            # One mutant survives, one is killed: the verdicts must not leak.
+            return os.path.basename(worktree) == "mutant-second"
+
+        self.harness.run_tests = capture
+        with tempfile.TemporaryDirectory() as work_root:
+            outcomes = self.harness.run_mutations(pristine, mutations, work_root)
+            first = copies[os.path.join(work_root, "mutant-first")]
+            second = copies[os.path.join(work_root, "mutant-second")]
+        self.assertEqual(outcomes, [False, True])
+        self.assertEqual(len(copies), 2, "each mutant needs its own copy")
+        self.assertIn("if len(row) < 3:", first)
+        self.assertNotIn("if len(row) != 3:", first)
+        self.assertIn("entry[3] -= value", second)
+        self.assertNotIn("entry[3] += value", second)
+        # The real deliverable was never touched.
+        with open(SCRIPT, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), pristine)
 
 
 if __name__ == "__main__":
