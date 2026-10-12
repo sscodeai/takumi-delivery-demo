@@ -29,14 +29,16 @@ jobs:
           2024-01-01,ALPHA,10.4
           2024-01-01,BRAVO,-2.5
           2024-01-02,ALPHA,11.6
+          2024-01-02,BRAVO,-1.5
+          2024-01-03,CHARLIE,0.0
           TAKUMI_SAMPLE
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 120s bash -c 'bash summary.sh takumi-sample.csv' || {
+          timeout 30s bash -c 'bash summary.sh takumi-sample.csv' || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 120s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
+              echo 'the deliverable command did not exit within 30s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
             fi
             exit "$rc"
           }

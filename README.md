@@ -81,8 +81,8 @@ Malformed rows never abort the run.
 ### Why this stack
 
 Bash plus Python 3's standard library needs no install step and runs on any
-developer laptop. Temperatures are kept as exact `Decimal` values and rendered
-through exact integer arithmetic, so the half-away-from-zero rule is not
+developer laptop. Temperatures are kept as exact rational (`fractions.Fraction`)
+values and rendered through exact integer arithmetic, so the half-away-from-zero rule is not
 distorted by binary floating point and the accumulated sum is independent of the
 row order. The tool reads exactly one local file, makes no network call and
 streams the CSV, so a year of readings (about 200,000 rows) is summarised in
@@ -143,6 +143,19 @@ malformed-row accounting and the rounding rule, and reproduces the exact
 fixtures the external acceptance judge builds from the requirement document
 (`tests/test_forged_judge_contract.py`). Together they cover every requirement
 and every confirmed decision in the requirement document.
+
+### Mutation harness
+
+REQ-005 requires the delivered tests to be able to fail. `bash mutation-test.sh`
+(`mutation/mutation_test.py`) copies the project into a throwaway directory,
+applies one deliberate defect to `summary.sh` at a time — a broken rounding
+boundary, a reversed station order, an accepted malformed row, a lost duplicate
+count, and so on — and runs the delivered CLI test suite against each mutant. It
+writes the declared `reports/mutation/mutation.json` report in the
+`survivors-json` shape (`{"total": <int>, "survivors": [...]}`) and exits
+non-zero when any mutant survives. The confirmed requirement allows zero
+survivors; the report records the mutant count the run measured so a run that
+measured nothing cannot look green.
 
 ## Continuous integration
 

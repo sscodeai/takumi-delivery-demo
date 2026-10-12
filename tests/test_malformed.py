@@ -85,3 +85,34 @@ class MalformedTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(total_of(result.stdout), 2)
         self.assertEqual(skipped_of(result.stdout), 0)
+
+    def test_an_undecodable_byte_does_not_abort_the_run(self):
+        # A malformed file must never abort the tool (REQ-005). An undecodable
+        # byte is decoded with replacement, so it only makes the field it
+        # touches malformed; the valid rows around it are still aggregated.
+        import os
+        import subprocess
+        import tempfile
+
+        from helpers import ROOT, SCRIPT
+
+        handle = tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False)
+        path = handle.name
+        handle.write(
+            HEADER.encode("ascii")
+            + b"2024-01-01,ALPHA,1.0\n"
+            + b"2024-01-02,BRAVO,\xff\n"
+            + b"2024-01-03,ALPHA,2.0\n"
+        )
+        handle.close()
+        try:
+            result = subprocess.run(
+                ["bash", SCRIPT, path], cwd=ROOT, capture_output=True, text=True
+            )
+        finally:
+            os.unlink(path)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(total_of(result.stdout), 2)
+        self.assertEqual(skipped_of(result.stdout), 1)
+        self.assertIn("ALPHA 2 1.0 2.0 1.5\n", result.stdout)
