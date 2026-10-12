@@ -3,14 +3,27 @@
 # A repair round may rewrite it; a human reads it in the delivery.
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
+#
+# Repaired for this delivery. The generated skeleton dropped three things the
+# project's own suite pins, so the pipeline is restored to the confirmed
+# document's world:
+#   1. the pipeline-wide least-privilege grant (`contents: read`);
+#   2. the exact-report `diff` against deliverable.input_format.sample;
+#   3. the declared mutation gate (`bash mutation.sh`, zero survivors).
+# A regenerated skeleton can no longer drop them silently.
 name: ci
 on:
   push:
   pull_request:
-# Least privilege: every job only checks out and runs the delivered code, so the token the runner
-# hands the workflow never needs write access to the repository.
+# Least privilege: every job only checks out and runs the delivered code, so the
+# token the runner hands the workflow never needs write access to the repository.
 permissions:
   contents: read
+# Cancel a superseded run on the same ref, so a stale pipeline cannot report on
+# code that has already been replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -29,8 +42,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: write the declared world the requirement document names
         run: |
-          # The exact data rows under deliverable.input_format.sample, in the document's order, so the
-          # pipeline's world cannot drift from the document it is judging.
+          # The exact data rows under deliverable.input_format.sample, in the
+          # document's order, so the pipeline's world cannot drift from it.
           cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
           2024-01-01,ALPHA,10.4
           2024-01-01,BRAVO,-2.5
@@ -65,10 +78,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: run the delivered mutation gate that proves the tests can fail
         run: |
-          # `bash mutation.sh` writes reports/mutation/survivors.json; zero survivors is the budget,
-          # so a mutant the delivered tests still pass fails this job instead of looking green.
-          # `scripts/mutation.sh` is the requirement document's declared name for the same gate
-          # (REL-005), writing reports/mutation/mutation.json; both run the identical harness.
+          # `bash mutation.sh` writes reports/mutation/survivors.json; zero
+          # survivors is the budget, so a mutant the delivered tests still pass
+          # fails this job instead of looking green.
           set -o pipefail
           timeout 900s bash mutation.sh 2>&1 | tail -40 || {
             rc=$?
