@@ -135,8 +135,9 @@ bash run-tests.sh
 
 The suite drives the real entry points through a process boundary: it runs
 `bash summary.sh <csv>` on generated fixtures and compares the printed report
-against an independent reference implementation (`tests/reference.py`, exact
-`Fraction` arithmetic), and it starts `serve.sh` on a free port, waits for the
+against independent reference implementations (`tests/reference.py` with exact
+`Fraction` arithmetic and `tests/test_decimal_differential.py` with a
+`decimal`/`ROUND_HALF_UP` oracle), and it starts `serve.sh` on a free port, waits for the
 declared URL and reads the JSON report against the same reference. It keeps
 randomized permutation and differential properties for both shapes, pins the
 malformed-row accounting and the rounding rule, and reproduces the exact

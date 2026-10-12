@@ -22,10 +22,12 @@ from helpers import HEADER, ROOT, SCRIPT, run_csv, skipped_of, total_of
 DOC = os.path.join(ROOT, "docs", "requirements", "intake.yaml")
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
-ID_RE = re.compile(r"^\s*-\s*id:\s*(REQ-\d{3}|AMB-\d{3})\s*$", re.MULTILINE)
+ID_RE = re.compile(r"^\s*-\s*id:\s*((?:REQ|AMB|REL|DIFF)-\d{3})\s*$", re.MULTILINE)
 
 EXPECTED_REQUIREMENTS = {"REQ-%03d" % index for index in range(1, 10)}
 EXPECTED_AMBIGUITIES = {"AMB-%03d" % index for index in range(1, 6)}
+EXPECTED_RELATIONS = {"REL-%03d" % index for index in range(1, 5)}
+EXPECTED_DIFFERENTIALS = {"DIFF-%03d" % index for index in range(1, 2)}
 
 
 def declared_ids():
@@ -45,6 +47,8 @@ class DocumentTraceabilityTests(unittest.TestCase):
         ids = declared_ids()
         self.assertTrue(EXPECTED_REQUIREMENTS <= ids, EXPECTED_REQUIREMENTS - ids)
         self.assertTrue(EXPECTED_AMBIGUITIES <= ids, EXPECTED_AMBIGUITIES - ids)
+        self.assertTrue(EXPECTED_RELATIONS <= ids, EXPECTED_RELATIONS - ids)
+        self.assertTrue(EXPECTED_DIFFERENTIALS <= ids, EXPECTED_DIFFERENTIALS - ids)
 
     def test_every_declared_id_is_named_by_a_test_module(self):
         # A declared id that no test module names has no traceable coverage.
@@ -66,6 +70,18 @@ class DocumentTraceabilityTests(unittest.TestCase):
         for _name, source in test_sources():
             method_ids.update(re.findall(r"def test_(req_\d{3})", source))
         for identifier in sorted(EXPECTED_REQUIREMENTS):
+            with self.subTest(identifier=identifier):
+                lowered = identifier.lower().replace("-", "_")
+                self.assertIn(lowered, method_ids)
+
+    def test_every_relation_has_a_behavioural_test_method(self):
+        # The document's REL-nnn relations must be pinned by a test method that
+        # carries the id in its name, so a new relation cannot be declared
+        # without a behavioural check landing with it.
+        method_ids = set()
+        for _name, source in test_sources():
+            method_ids.update(re.findall(r"def test_(rel_\d{3})", source))
+        for identifier in sorted(EXPECTED_RELATIONS):
             with self.subTest(identifier=identifier):
                 lowered = identifier.lower().replace("-", "_")
                 self.assertIn(lowered, method_ids)
