@@ -41,7 +41,17 @@ class ValidityTests(unittest.TestCase):
     def test_dates(self):
         for good in ("2024-01-01", "2024-02-29", "2024-01-01T08:00:00", "2024-01-01 08:00"):
             self.assertTrue(is_date(good), good)
-        for bad in ("2023-02-29", "2024-02-30", "2024-13-01", "2024-1-1", "not-a-date", ""):
+        for bad in (
+            "2023-02-29",
+            "2024-02-30",
+            "2024-13-01",
+            "2024-1-1",
+            "not-a-date",
+            "",
+            "2024-01-01Tbogus",
+            "2024-01-01 x",
+            "2024-01-01T25:00:00",
+        ):
             self.assertFalse(is_date(bad), bad)
 
     def test_temperatures(self):
