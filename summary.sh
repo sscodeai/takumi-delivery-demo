@@ -18,10 +18,11 @@
 #   AMB-004 ascending   station lines are sorted by ascending byte-wise station id
 #   AMB-005 valid-only  TOTAL counts valid readings only (the sum of the station counts)
 #
-# The aggregation runs in Python 3 using only the standard library. Decimal values
-# and integer-ratio rendering make the half-up rule exact instead of subject to
-# binary floating point. The tool reads exactly one local file and performs no
-# network I/O.
+# The aggregation runs in Python 3 using only the standard library. Temperatures
+# are kept as exact rationals (fractions.Fraction) and rendered with integer
+# arithmetic, so the half-up rule is exact and row order cannot perturb a value.
+# The tool reads exactly one local file and performs no network I/O, so it works
+# on a laptop with the network disabled.
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
@@ -34,11 +35,7 @@ import csv
 import re
 import sys
 from datetime import date
-from decimal import Decimal, DecimalException, localcontext
-
-# Fold rows with far more precision than a real temperature sum needs so that the
-# order in which rows are read cannot change the accumulated value.
-CONTEXT_PRECISION = 100000
+from fractions import Fraction
 
 # A well-formed date is a zero-padded ISO-8601 calendar date, optionally followed
 # by a time suffix. The calendar part must name a real day.
@@ -50,20 +47,20 @@ DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})(?:[T ].*)?$")
 TEMP_RE = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
 
 # The declared header, consumed and never treated as a reading. A first line that
-# is not this header (for example the pipeline's header-less sample) is treated as
-# a reading in the declared positional order instead.
+# is not this header (for example the document's header-less sample) is treated
+# as a reading in the declared positional order instead.
 HEADER_NAMES = ("date", "station", "temperature_c")
 
 # A single pathological record must never abort the run (REQ-005), so keep overly
 # long fields from raising a csv error that would escape the per-row handling.
 try:
     csv.field_size_limit(2 ** 31 - 1)
-except (OverflowError, ValueError):
+except (OverflowError, ValueError):  # pragma: no cover - defensive
     pass
 
 # Python 3.11 caps int-to-str conversion by default. A record with thousands of
-# digits is still a number the tool must be able to render, so raise the cap
-# well above the precision this tool computes with.
+# digits is still a number the tool must be able to render, so raise the cap well
+# above anything a temperature export can hold.
 if hasattr(sys, "set_int_max_str_digits"):
     try:
         sys.set_int_max_str_digits(1000000)
@@ -89,133 +86,141 @@ def is_temperature(text):
     return TEMP_RE.match(text) is not None
 
 
-def render_ratio(numerator, denominator):
-    """Render numerator/denominator with one decimal, half away from zero.
+def render_one_decimal(value):
+    """Render a value already scaled by ten as one decimal, half away from zero.
 
-    Exact integer arithmetic: the scaled quotient is rounded up whenever the
-    remainder is at least half the divisor, which is what AMB-003 chose.
+    Callers multiply the reading (or the mean) by ten and pass the exact
+    Fraction here; rounding happens in integer arithmetic, so no binary floating
+    point value is ever involved in the rendered digit.
     """
-    negative = (numerator < 0) != (denominator < 0)
-    numerator = -numerator if numerator < 0 else numerator
-    denominator = -denominator if denominator < 0 else denominator
+    numerator, denominator = value.numerator, value.denominator
+    negative = numerator < 0
+    if negative:
+        numerator = -numerator
     quotient, remainder = divmod(numerator, denominator)
     if remainder * 2 >= denominator:
         quotient += 1
     if quotient == 0:
         return "0.0"  # normalise negative zero
-    sign = "-" if negative else ""
-    return "%s%d.%d" % (sign, quotient // 10, quotient % 10)
+    return "%s%d.%d" % ("-" if negative else "", quotient // 10, quotient % 10)
 
 
 def render_reading(value):
-    """Render a Decimal reading with one decimal place, half away from zero."""
-    numerator, denominator = value.as_integer_ratio()
-    return render_ratio(numerator * 10, denominator)
+    """Render a reading as one decimal place, half away from zero (AMB-003)."""
+    return render_one_decimal(value * 10)
 
 
-def render_mean(accumulated, count):
-    """Render the arithmetic mean of Decimal values with one decimal place."""
-    numerator, denominator = accumulated.as_integer_ratio()
-    return render_ratio(numerator * 10, denominator * count)
+def render_mean(total, count):
+    """Render the arithmetic mean as one decimal, half away from zero (AMB-003)."""
+    return render_one_decimal((total / count) * 10)
+
+
+def read_rows(handle):
+    """Yield the fields of every CSV record, tolerating parser-level errors.
+
+    A record the csv module itself rejects is reported as a ``None`` row so the
+    caller can count it as malformed without the run aborting (REQ-005).
+    """
+    reader = csv.reader(handle)
+    while True:
+        try:
+            yield next(reader)
+        except StopIteration:
+            return
+        except csv.Error:
+            yield None
+
+
+def aggregate(path):
+    """Aggregate the CSV at ``path``; return (station rows, skipped, total).
+
+    ``station rows`` is a list of ``(station, count, min, max, mean)`` tuples in
+    ascending byte-wise station order. A row is valid when it has three fields, a
+    non-empty station id, a calendar-valid ISO date and a plain decimal
+    temperature. Every other row is counted as skipped and never changes an
+    aggregate (AMB-001). Every occurrence of a repeated (date, station) key is
+    its own reading (AMB-002). ``total`` counts valid readings only (AMB-005).
+    """
+    stations = {}  # station id -> [count, min, max, sum]
+    skipped = 0
+    total = 0
+    header_seen = False
+    date_i, station_i, temperature_i = 0, 1, 2
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+        for row in read_rows(handle):
+            if row is None:  # a record the parser rejected is malformed
+                skipped += 1
+                continue
+
+            if not header_seen:
+                header_seen = True
+                names = [column.strip().lower() for column in row]
+                if all(name in names for name in HEADER_NAMES):
+                    date_i = names.index("date")
+                    station_i = names.index("station")
+                    temperature_i = names.index("temperature_c")
+                    # The declared header is consumed and is never a reading.
+                    continue
+
+            if len(row) != 3:
+                skipped += 1
+                continue
+
+            station = row[station_i]
+            if station == "":
+                skipped += 1
+                continue
+            if not is_date(row[date_i]):
+                skipped += 1
+                continue
+            if not is_temperature(row[temperature_i]):
+                skipped += 1
+                continue
+
+            # AMB-002 merge: the aggregate is keyed by station only, so a
+            # repeated (date, station) row is folded in as its own reading.
+            value = Fraction(row[temperature_i])
+            entry = stations.get(station)
+            if entry is None:
+                stations[station] = [1, value, value, value]
+            else:
+                entry[0] += 1
+                if value < entry[1]:
+                    entry[1] = value
+                if value > entry[2]:
+                    entry[2] = value
+                entry[3] += value
+            total += 1
+
+    rows = []
+    # AMB-004: ascending byte-wise station id order.
+    for station in sorted(stations, key=lambda name: name.encode("utf-8")):
+        count, minimum, maximum, accumulated = stations[station]
+        rows.append(
+            (
+                station,
+                count,
+                render_reading(minimum),
+                render_reading(maximum),
+                render_mean(accumulated, count),
+            )
+        )
+    return rows, skipped, total
 
 
 def main(path):
-    with localcontext() as ctx:
-        ctx.prec = CONTEXT_PRECISION
+    try:
+        rows, skipped, total = aggregate(path)
+    except OSError as exc:
+        sys.stderr.write("summary.sh: cannot read %s: %s\n" % (path, exc))
+        return 1
 
-        try:
-            handle = open(path, "r", encoding="utf-8-sig", newline="")
-        except OSError as exc:
-            sys.stderr.write("summary.sh: cannot read %s: %s\n" % (path, exc))
-            return 1
-
-        # station id -> [count, min, max, sum]
-        stations = {}
-        skipped = 0
-        total = 0
-        header_seen = False
-        date_i, station_i, temperature_i = 0, 1, 2
-
-        with handle:
-            reader = csv.reader(handle)
-            while True:
-                try:
-                    row = next(reader)
-                except StopIteration:
-                    break
-                except csv.Error:
-                    # A record the parser itself rejects is malformed.
-                    skipped += 1
-                    continue
-
-                if not header_seen:
-                    header_seen = True
-                    names = [column.strip().lower() for column in row]
-                    if all(name in names for name in HEADER_NAMES):
-                        date_i = names.index("date")
-                        station_i = names.index("station")
-                        temperature_i = names.index("temperature_c")
-                        # The declared header is consumed and never treated as a
-                        # reading. A first line that is not the declared header is
-                        # a reading in the positional column order.
-                        continue
-
-                if len(row) != 3:
-                    skipped += 1
-                    continue
-
-                station = row[station_i]
-                if station == "":
-                    skipped += 1
-                    continue
-                if not is_date(row[date_i]):
-                    skipped += 1
-                    continue
-                if not is_temperature(row[temperature_i]):
-                    skipped += 1
-                    continue
-
-                try:
-                    temperature = Decimal(row[temperature_i])
-                except DecimalException:
-                    skipped += 1
-                    continue
-                if not temperature.is_finite():
-                    skipped += 1
-                    continue
-
-                # AMB-002 merge: the aggregate is keyed by station only, so a
-                # repeated (date, station) row is folded in as its own reading.
-                entry = stations.get(station)
-                if entry is None:
-                    stations[station] = [1, temperature, temperature, temperature]
-                else:
-                    entry[0] += 1
-                    if temperature < entry[1]:
-                        entry[1] = temperature
-                    if temperature > entry[2]:
-                        entry[2] = temperature
-                    entry[3] += temperature
-                total += 1
-
-        # AMB-004: ascending byte-wise station id order.
-        out = []
-        for station in sorted(stations, key=lambda name: name.encode("utf-8")):
-            count, minimum, maximum, accumulated = stations[station]
-            out.append(
-                "%s %d %s %s %s"
-                % (
-                    station,
-                    count,
-                    render_reading(minimum),
-                    render_reading(maximum),
-                    render_mean(accumulated, count),
-                )
-            )
-        out.append("SKIPPED %d" % skipped)
-        out.append("TOTAL %d" % total)
-        sys.stdout.write("\n".join(out) + "\n")
-        return 0
+    out = ["%s %d %s %s %s" % row for row in rows]
+    out.append("SKIPPED %d" % skipped)
+    out.append("TOTAL %d" % total)
+    sys.stdout.write("\n".join(out) + "\n")
+    return 0
 
 
 if __name__ == "__main__":
