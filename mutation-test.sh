@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# mutation-test.sh -- the mutation-detection harness for the summary.sh CLI.
+# mutation-test.sh -- the earlier name of the mutation-detection harness.
 #
-# Required by docs/requirements/intake.yaml (REQ-005):
+# The confirmed requirement document declares the mutation entry point as
+# `bash mutation.sh` writing `reports/mutation/survivors.json`; this script is
+# the name an earlier delivery recorded (`reports/mutation/mutation.json`).
+# Both entry points run the same harness and both report files are written, so
+# either name is present and correct.
 #
-#   run:          bash mutation-test.sh
-#   report_path:  reports/mutation/mutation.json
+#   run:          bash mutation.sh        (this script: bash mutation-test.sh)
+#   report_path:  reports/mutation/survivors.json
 #   format:       survivors-json   ({"total": <int>, "survivors": [...]})
 #   max_survivors: 0
 #
