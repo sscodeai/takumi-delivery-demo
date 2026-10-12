@@ -4,21 +4,26 @@ Demonstration target for takumi's black-box delivery mode: a confirmed
 requirement becomes a delivered product through an independently forged judge, a
 pull request, an issue, a pipeline, and a merge.
 
-## The delivered product: the station summary HTTP service
+The repository holds two delivered shapes of the same station-summary
+aggregation, both kept and both tested:
 
-The confirmed requirement is
-`docs/requirements/service-station-summary.yaml` (REQ-DOC-002). The deliverable is
-a long-running HTTP service, not a script: `bash serve.sh <input.csv> <port>`
-starts it on `127.0.0.1:<port>` and it answers `GET /summary` with a JSON body
-until it is killed.
+1. the **CLI tool** `summary.sh`, delivered from
+   `docs/requirements/intake.yaml` — the current requirement; and
+2. the **HTTP service** `serve.sh` + `station_summary.py`, delivered from
+   `docs/requirements/service-station-summary.yaml`.
+
+## The delivered product: `summary.sh`
+
+The confirmed requirement is `docs/requirements/intake.yaml`. The deliverable is
+a single command: `bash summary.sh <input.csv>` reads one local CSV, writes the
+per-station summary to stdout and exits 0 when the file was processed.
 
 ```sh
-bash serve.sh readings.csv 8787
-curl -fsS http://127.0.0.1:8787/summary
+bash summary.sh readings.csv
 ```
 
-The input CSV has the header `date,station,temperature_c`, followed by one
-reading per line:
+The input CSV is a daily temperature export whose header names the columns
+`date`, `station` and `temperature_c`; every following line is one reading:
 
 ```csv
 date,station,temperature_c
@@ -29,9 +34,75 @@ date,station,temperature_c
 2024-01-03,ALPHA,9.5
 ```
 
-For that file the endpoint answers with one JSON array carrying one declared
-object per line: one station object per station with at least one valid reading,
-then the skipped count, then the overall total.
+For that file the tool prints one line per station, then the skipped count, then
+the overall total:
+
+```text
+ALPHA 3 9.5 11.6 10.5
+BRAVO 2 -2.5 -1.5 -2.0
+SKIPPED 0
+TOTAL 5
+```
+
+- A station line is `<station> <count> <min> <max> <mean>` with single spaces.
+- `count` is the number of the station's valid readings.
+- `min` and `max` are its smallest and largest `temperature_c`.
+- `mean` is the arithmetic mean of its values.
+- `min`, `max` and `mean` each carry exactly one digit after the decimal point.
+- `SKIPPED <count>` counts the malformed rows that were excluded.
+- `TOTAL <count>` counts valid readings only: the per-station counts sum to it.
+- Station lines are emitted in ascending byte-wise station id order.
+
+The tool also accepts the requirement document's header-less sample (the columns
+are declared in the document): a first line that is not the declared header is
+itself a reading in the declared positional order, so a header-less fixture is
+aggregated rather than dropped.
+
+### Decisions
+
+The confirmed requirement document settled five ambiguities; the tool honours all
+of them:
+
+| Decision | Chosen option | Behaviour |
+| --- | --- | --- |
+| AMB-001 | skip-count | Malformed rows are skipped, excluded from every aggregate, and reported on `SKIPPED <count>`. |
+| AMB-002 | merge | Every occurrence of a repeated `(date, station)` key is its own reading. |
+| AMB-003 | half-up | `min`, `max` and `mean` round half away from zero to one decimal place. |
+| AMB-004 | ascending | Station lines are sorted by ascending byte-wise station id. |
+| AMB-005 | valid-only | `TOTAL` counts valid readings only. |
+
+A row is well-formed when it has exactly three comma-separated fields, a
+non-empty station, a calendar-valid ISO-8601 date (an optional time suffix is
+accepted) and a plain decimal temperature. A row with another field count, an
+empty station, an unparseable date or a non-numeric temperature is malformed: it
+is counted on the `SKIPPED` line and never changes a count, min, max or mean.
+Malformed rows never abort the run.
+
+### Why this stack
+
+Bash plus Python 3's standard library needs no install step and runs on any
+developer laptop. Temperatures are kept as exact `Decimal` values and rendered
+through exact integer arithmetic, so the half-away-from-zero rule is not
+distorted by binary floating point and the accumulated sum is independent of the
+row order. The tool reads exactly one local file, makes no network call and
+streams the CSV, so a year of readings (about 200,000 rows) is summarised in
+well under a second.
+
+## Additional artifact: the station summary HTTP service
+
+The service shape (`docs/requirements/service-station-summary.yaml`,
+REQ-DOC-002) is kept as a second delivered artifact. `bash serve.sh <input.csv>
+<port>` starts it on `127.0.0.1:<port>` and it answers `GET /summary` with a JSON
+body until it is killed.
+
+```sh
+bash serve.sh readings.csv 8787
+curl -fsS http://127.0.0.1:8787/summary
+```
+
+For the sample above the endpoint answers with one JSON array carrying one
+declared object per line: one station object per station with at least one valid
+reading, then the skipped count, then the overall total.
 
 ```json
 [
@@ -47,67 +118,14 @@ then the skipped count, then the overall total.
 
 - A station object is
   `{"station":"<station>","count":<count>,"min":<min>,"max":<max>,"mean":<mean>}`.
-- `count` is the number of the station's valid readings.
-- `min` and `max` are its smallest and largest `temperature_c`.
-- `mean` is the arithmetic mean of its values.
-- `min`, `max` and `mean` each carry exactly one decimal place.
 - `{"skipped":<count>}` counts the malformed rows that were excluded.
-- `{"total":<count>}` counts all valid readings (the per-station counts sum to
-  it).
+- `{"total":<count>}` counts valid readings only.
 - Station objects are emitted in ascending byte-wise station id order.
 
-The array separators sit on their own lines so every object line is exactly the
-shape the requirement document declares, while the whole body stays one valid
-JSON document.
-
-### Decisions
-
-The confirmed requirement document settled five ambiguities; the service honours
-all of them:
-
-| Decision | Chosen option | Behaviour |
-| --- | --- | --- |
-| AMB-001 | skip-count | Malformed rows are skipped, excluded from every aggregate, and reported on `{"skipped":<count>}`. |
-| AMB-002 | merge | Every occurrence of a repeated `(date, station)` key is its own reading. |
-| AMB-003 | half-up | `min`, `max` and `mean` round half away from zero to one decimal place. |
-| AMB-004 | ascending | Station objects are sorted by ascending byte-wise station id. |
-| AMB-005 | valid-only | `{"total":<count>}` counts valid readings only. |
-
-A row is well-formed when it has exactly three comma-separated fields, a
-non-empty station, a calendar-valid ISO-8601 date (an optional time suffix is
-accepted) and a plain decimal temperature. The declared header line
-`date,station,temperature_c` is consumed and never counted as a reading; a first
-line that is not that header is itself a reading in the declared positional
-order, so a header-less fixture is aggregated rather than dropped. Malformed rows
-never abort the service: the service stays up and keeps answering.
-
-### Why this stack
-
-Bash plus Python 3's standard library needs no install step and runs on any
-developer laptop. Temperatures are kept as exact `Fraction` values and rendered
-through exact integer arithmetic, so the half-away-from-zero rule is not
-distorted by binary floating point. The service binds `127.0.0.1`, makes no
-outbound network call and parses the CSV once at start-up, so a year of readings
-(about 200,000 rows) is summarised in a couple of seconds and then served from
+The service uses the same parsing and aggregation rules and the same confirmed
+decisions as the CLI tool. It binds `127.0.0.1`, makes no outbound network call
+and sums the fixture once at start-up, so it serves a year of readings from
 memory.
-
-## The CLI tool: `summary.sh`
-
-The previous requirement (`docs/requirements/intake.yaml`) delivered a script
-with the same aggregation and a text report; it is kept and still tested.
-
-```sh
-bash summary.sh readings.csv
-```
-
-For the sample above it prints:
-
-```text
-ALPHA 3 9.5 11.6 10.5
-BRAVO 2 -2.5 -1.5 -2.0
-SKIPPED 0
-TOTAL 5
-```
 
 ## Tests
 
@@ -115,18 +133,21 @@ TOTAL 5
 bash run-tests.sh
 ```
 
-The suite drives the real entry points through a process boundary: it starts
-`serve.sh` on a free port, waits for the declared URL and reads the JSON report
+The suite drives the real entry points through a process boundary: it runs
+`bash summary.sh <csv>` on generated fixtures and compares the printed report
 against an independent reference implementation (`tests/reference.py`, exact
-`Fraction` arithmetic). It also keeps the previous CLI tool's randomized
-permutation/differential property suite and drives `summary.sh` through the same
-reference. Together they cover every requirement and every confirmed decision in
-the requirement document.
+`Fraction` arithmetic), and it starts `serve.sh` on a free port, waits for the
+declared URL and reads the JSON report against the same reference. It keeps
+randomized permutation and differential properties for both shapes, pins the
+malformed-row accounting and the rounding rule, and reproduces the exact
+fixtures the external acceptance judge builds from the requirement document
+(`tests/test_forged_judge_contract.py`). Together they cover every requirement
+and every confirmed decision in the requirement document.
 
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs the delivered project's own tests
-(`bash run-tests.sh`) and starts the service on a free port with the requirement
-document's sample input, waits for the declared URL and asserts the declared JSON
-response. The service smoke test is bounded, so a service that never answers
-fails the job instead of waiting out the runner's limit.
+(`bash run-tests.sh`) and runs the deliverable exactly as the requirement
+document declares it (`bash summary.sh <sample>`). The delivered command is
+bounded with `timeout`, so a tool that never exits fails the job instead of
+waiting out the runner's limit.
