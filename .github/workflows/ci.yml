@@ -10,7 +10,9 @@
 #   1. the pipeline-wide least-privilege grant (`contents: read`);
 #   2. the exact-report `diff` against deliverable.input_format.sample;
 #   3. the declared mutation gate (`bash mutation.sh`, zero survivors).
-# A regenerated skeleton can no longer drop them silently.
+# Every job is additionally bounded by `timeout-minutes`, so a job that hangs
+# fails on its own budget instead of occupying a runner until the platform
+# kills it. A regenerated skeleton can no longer drop these silently.
 name: ci
 on:
   push:
@@ -27,6 +29,7 @@ concurrency:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: run the delivered project's own tests
@@ -38,6 +41,7 @@ jobs:
           else echo "no test command found in this project" >&2; exit 1; fi
   deliverable:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: write the declared world the requirement document names
@@ -74,6 +78,7 @@ jobs:
           diff -u expected.txt report.txt
   mutation:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: run the delivered mutation gate that proves the tests can fail
