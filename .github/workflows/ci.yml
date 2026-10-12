@@ -67,6 +67,8 @@ jobs:
         run: |
           # `bash mutation.sh` writes reports/mutation/survivors.json; zero survivors is the budget,
           # so a mutant the delivered tests still pass fails this job instead of looking green.
+          # `scripts/mutation.sh` is the requirement document's declared name for the same gate
+          # (REL-005), writing reports/mutation/mutation.json; both run the identical harness.
           set -o pipefail
           timeout 900s bash mutation.sh 2>&1 | tail -40 || {
             rc=$?
