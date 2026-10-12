@@ -47,6 +47,11 @@ TEMP_RE = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
 # that is not this header is treated as a reading in positional order instead.
 HEADER_NAMES = ("date", "station", "temperature_c")
 
+# A readable file must never abort the service, so the stream decoder replaces an
+# undecodable byte instead of raising.  A record that needed a replacement byte is
+# a record that could not be parsed and is counted among the skipped rows.
+REPLACEMENT = "\ufffd"
+
 # A pathological record must never abort the service (REQ-005), so keep overly
 # long fields from raising a csv error that would escape the per-row handling.
 try:
@@ -134,7 +139,9 @@ def aggregate(path):
     header_seen = False
     date_i, station_i, temperature_i = 0, 1, 2
 
-    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+    with open(
+        path, "r", encoding="utf-8-sig", errors="replace", newline=""
+    ) as handle:
         reader = csv.reader(handle)
         while True:
             try:
@@ -143,6 +150,12 @@ def aggregate(path):
                 break
             except csv.Error:
                 # A record the parser itself rejects is malformed.
+                skipped += 1
+                continue
+
+            if any(REPLACEMENT in field for field in row):
+                # A byte that is not valid UTF-8 makes the record unparseable; it
+                # is skipped and counted instead of aborting the service.
                 skipped += 1
                 continue
 

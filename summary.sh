@@ -54,6 +54,12 @@ TEMP_RE = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
 # a reading in the declared positional order instead.
 HEADER_NAMES = ("date", "station", "temperature_c")
 
+# A readable file must never abort the run, so the stream decoder replaces an
+# undecodable byte instead of raising. A record that needed a replacement byte is
+# a record that could not be parsed and is counted among the skipped rows, exactly
+# like a wrong field count or an unparseable temperature (REQ-005).
+REPLACEMENT = "\ufffd"
+
 # A single pathological record must never abort the run (REQ-005), so keep overly
 # long fields from raising a csv error that would escape the per-row handling.
 try:
@@ -124,7 +130,9 @@ def main(path):
         ctx.prec = CONTEXT_PRECISION
 
         try:
-            handle = open(path, "r", encoding="utf-8-sig", newline="")
+            handle = open(
+                path, "r", encoding="utf-8-sig", errors="replace", newline=""
+            )
         except OSError as exc:
             sys.stderr.write("summary.sh: cannot read %s: %s\n" % (path, exc))
             return 1
@@ -145,6 +153,12 @@ def main(path):
                     break
                 except csv.Error:
                     # A record the parser itself rejects is malformed.
+                    skipped += 1
+                    continue
+
+                if any(REPLACEMENT in field for field in row):
+                    # A byte that is not valid UTF-8 makes the record unparseable;
+                    # it is skipped and counted instead of aborting the run.
                     skipped += 1
                     continue
 

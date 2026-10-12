@@ -2,7 +2,7 @@
 
 import unittest
 
-from helpers import HEADER, run_csv, skipped_of, station_lines, total_of
+from helpers import HEADER, run_csv, run_csv_bytes, skipped_of, station_lines, total_of
 
 
 class MalformedTests(unittest.TestCase):
@@ -85,3 +85,31 @@ class MalformedTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(total_of(result.stdout), 2)
         self.assertEqual(skipped_of(result.stdout), 0)
+
+    def test_undecodable_bytes_are_skipped_and_never_abort_the_run(self):
+        # A readable CSV export is bytes, not guaranteed text: an undecodable
+        # byte makes its record unparseable, so the record is skipped and
+        # counted while the decodable records still aggregate. The process must
+        # still exit 0, as REQ-001 promises for a readable input.
+        payload = (
+            (HEADER + "2024-01-01,ALPHA,1.0\n").encode("utf-8")
+            + b"2024-01-02,\xff\xfe,2.0\n"
+            + b"2024-01-03,ALPHA,3.0\n"
+        )
+        result = run_csv_bytes(payload)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "ALPHA 2 1.0 3.0 2.0\nSKIPPED 1\nTOTAL 2\n")
+
+    def test_undecodable_bytes_in_the_date_field_are_skipped(self):
+        # Where the bad byte lands does not matter: the record still cannot be
+        # parsed, so it is counted among the skipped rows either way.
+        payload = (HEADER + "2024-01-01,ALPHA,1.0\n").encode("utf-8") + b"\xff-01-02,ALPHA,2.0\n"
+        result = run_csv_bytes(payload)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "ALPHA 1 1.0 1.0 1.0\nSKIPPED 1\nTOTAL 1\n")
+
+    def test_an_undecodable_file_is_still_processed_to_completion(self):
+        payload = b"\xff\xfe\xfd\n" + (HEADER + "2024-01-01,ALPHA,1.0\n").encode("utf-8")
+        result = run_csv_bytes(payload)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "ALPHA 1 1.0 1.0 1.0\nSKIPPED 1\nTOTAL 1\n")
