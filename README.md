@@ -144,6 +144,19 @@ fixtures the external acceptance judge builds from the requirement document
 (`tests/test_forged_judge_contract.py`). Together they cover every requirement
 and every confirmed decision in the requirement document.
 
+### Mutation harness
+
+REQ-005 requires the delivered tests to be able to fail. `bash mutation-test.sh`
+(`mutation/mutation_test.py`) copies the project into a throwaway directory,
+applies one deliberate defect to `summary.sh` at a time — a broken rounding
+boundary, a reversed station order, an accepted malformed row, a lost duplicate
+count, and so on — and runs the delivered CLI test suite against each mutant. It
+writes the declared `reports/mutation/mutation.json` report in the
+`survivors-json` shape (`{"total": <int>, "survivors": [...]}`) and exits
+non-zero when any mutant survives. The confirmed requirement allows zero
+survivors; the report records the mutant count the run measured so a run that
+measured nothing cannot look green.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs the delivered project's own tests
