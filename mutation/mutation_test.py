@@ -27,6 +27,7 @@ The report is written in the declared ``survivors-json`` shape:
                                     "description": ...}, ...]}
 """
 
+import concurrent.futures
 import json
 import os
 import shutil
@@ -216,7 +217,12 @@ def write_reports(primary, total, survivors, mirrors=None):
 
 
 def run_tests(worktree):
-    """Run the delivered CLI suite in the copied project; True when it passes."""
+    """Run the delivered CLI suite in the copied project; True when it passes.
+
+    The SAME suite the project runs for every mutant.  It is the caller's
+    responsibility to point ``worktree`` at a copy that carries exactly one
+    mutation, which is what lets the per-mutant runs overlap safely.
+    """
     tests_dir = os.path.join(worktree, "tests")
     modules = cli_test_modules(tests_dir)
     if not modules:
@@ -235,6 +241,53 @@ def run_tests(worktree):
         # A mutant that hangs the suite did not survive: the suite did not pass.
         return False
     return result.returncode == 0
+
+
+def mutation_workers(count):
+    """How many mutants to run at once for ``count`` pending mutants.
+
+    Each mutant spends its time starting short-lived interpreters and the
+    delivered script, so overlapping a few runs past the core count hides the
+    spawn latency without oversubscribing the machine.  The cap keeps a large
+    catalogue from flooding a small runner with processes.
+    """
+    cores = os.cpu_count() or 1
+    return max(1, min(count, cores + 2, 8))
+
+
+def run_mutation(pristine, mutation, work_root):
+    """Run ONE mutation against its own throwaway copy; True when it survives.
+
+    Every mutant gets a private copy so the per-mutant runs can proceed
+    concurrently without one mutation's ``summary.sh`` overwriting another's.
+    The copy is the same project the harness would have run in place, minus the
+    ignored VCS/engine/report/cache paths.
+    """
+    worktree = os.path.join(work_root, "mutant-%s" % mutation["id"])
+    shutil.copytree(ROOT, worktree, dirs_exist_ok=True, ignore=COPY_IGNORE)
+    summary_copy = os.path.join(worktree, "summary.sh")
+    with open(summary_copy, "w", encoding="utf-8") as handle:
+        handle.write(pristine.replace(mutation["old"], mutation["new"], 1))
+    return run_tests(worktree)
+
+
+def run_mutations(pristine, mutations, work_root):
+    """Run every mutation, concurrently, and return survivors in input order.
+
+    ``run_tests`` is looked up in module globals on each call, so callers that
+    substitute it (the unit tests, a future scheduler) keep control of the
+    verdict while the concurrency stays here.
+    """
+    if not mutations:
+        return []
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=mutation_workers(len(mutations))
+    ) as pool:
+        futures = [
+            pool.submit(run_mutation, pristine, mutation, work_root)
+            for mutation in mutations
+        ]
+        return [future.result() for future in futures]
 
 
 def parse_report(argv):
@@ -272,47 +325,43 @@ def main(argv=None):
     with open(SUMMARY, "r", encoding="utf-8") as handle:
         pristine = handle.read()
 
-    work = tempfile.mkdtemp(prefix="takumi-mutation-")
-    survivors = []
     total = 0
+    survivors = []
+    runnable = []
+    for mutation in MUTATIONS:
+        total += 1
+        if pristine.count(mutation["old"]) != 1:
+            # An anchor that no longer exists cannot be applied; that is not a
+            # pass, it is the harness losing its grip on the deliverable.
+            survivors.append(
+                {
+                    "file": "summary.sh",
+                    "line": 1,
+                    "description": "%s: mutation anchor not found exactly once"
+                    % mutation["description"],
+                }
+            )
+            print("mutant %-22s SURVIVED (anchor missing)" % mutation["id"])
+            continue
+        runnable.append(mutation)
+
+    work = tempfile.mkdtemp(prefix="takumi-mutation-")
     try:
-        shutil.copytree(ROOT, work, dirs_exist_ok=True, ignore=COPY_IGNORE)
-        summary_copy = os.path.join(work, "summary.sh")
-        for mutation in MUTATIONS:
-            total += 1
-            old = mutation["old"]
-            if pristine.count(old) != 1:
-                # An anchor that no longer exists cannot be applied; that is not
-                # a pass, it is the harness losing its grip on the deliverable.
-                survivors.append(
-                    {
-                        "file": "summary.sh",
-                        "line": 1,
-                        "description": "%s: mutation anchor not found exactly once"
-                        % mutation["description"],
-                    }
-                )
-                print("mutant %-22s SURVIVED (anchor missing)" % mutation["id"])
-                continue
-            with open(summary_copy, "w", encoding="utf-8") as handle:
-                handle.write(pristine.replace(old, mutation["new"], 1))
-            passed = run_tests(work)
-            state = "SURVIVED" if passed else "killed"
-            print("mutant %-22s %s" % (mutation["id"], state))
-            if passed:
-                survivors.append(
-                    {
-                        "file": "summary.sh",
-                        "line": line_of(pristine, old),
-                        "description": mutation["description"],
-                    }
-                )
-        # Restore the pristine source in the copy so a later reader never sees a
-        # mutant (the copy is removed anyway, but the intent is explicit).
-        with open(summary_copy, "w", encoding="utf-8") as handle:
-            handle.write(pristine)
+        outcomes = run_mutations(pristine, runnable, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+    for mutation, passed in zip(runnable, outcomes):
+        state = "SURVIVED" if passed else "killed"
+        print("mutant %-22s %s" % (mutation["id"], state))
+        if passed:
+            survivors.append(
+                {
+                    "file": "summary.sh",
+                    "line": line_of(pristine, mutation["old"]),
+                    "description": mutation["description"],
+                }
+            )
 
     write_reports(report, total, survivors)
     print("MUTATION: %d mutant(s), %d survivor(s)" % (total, len(survivors)))
