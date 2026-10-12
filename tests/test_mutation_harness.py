@@ -162,6 +162,9 @@ class MutationContractTests(unittest.TestCase):
         self.assertNotIn("test_service", modules)
         self.assertNotIn("test_service_units", modules)
         self.assertNotIn("test_mutation_harness", modules)
+        # The entry-point contract module runs `bash mutation.sh`; leaving it
+        # in would recurse instead of measuring a mutant.
+        self.assertNotIn("test_mutation_entry_point_contract", modules)
 
     def test_line_of_points_at_the_anchor(self):
         line = self.harness.line_of(self.summary, "if len(row) != 3:")
