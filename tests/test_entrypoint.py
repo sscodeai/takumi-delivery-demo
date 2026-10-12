@@ -15,6 +15,11 @@ class EntryPointTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(SCRIPT))
         self.assertTrue(os.access(SCRIPT, os.R_OK))
 
+    def test_script_is_executable(self):
+        # The deliverable is invoked as `bash summary.sh <csv>`, but an
+        # executable bit makes the root entry point discoverable directly.
+        self.assertTrue(os.access(SCRIPT, os.X_OK))
+
     def test_invoked_as_bash_script_with_csv_path(self):
         result = run_csv(HEADER + "2024-01-01,ALPHA,1.0\n")
         self.assertEqual(result.returncode, 0)
@@ -74,6 +79,18 @@ class TestRunnerEntryTests(unittest.TestCase):
     def test_runner_exists_and_is_readable_at_repository_root(self):
         self.assertTrue(os.path.isfile(RUNNER))
         self.assertTrue(os.access(RUNNER, os.R_OK))
+
+    def test_runner_is_executable_so_the_smoke_gate_can_invoke_it(self):
+        # The host smoke gate has to be able to RUN the suite; an executable
+        # root script is the discoverable entry point the task asks for.
+        self.assertTrue(os.access(RUNNER, os.X_OK))
+
+    def test_mutation_entry_point_exists_and_is_executable(self):
+        # REL-005: the acceptance judge runs `bash mutation-test.sh`; the entry
+        # point must be present at the repository root for the host to run it.
+        mutation = os.path.join(ROOT, "mutation-test.sh")
+        self.assertTrue(os.path.isfile(mutation))
+        self.assertTrue(os.access(mutation, os.X_OK))
 
     def test_runner_is_valid_bash(self):
         result = subprocess.run(
