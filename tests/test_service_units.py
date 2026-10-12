@@ -85,11 +85,36 @@ class FieldTests(unittest.TestCase):
         self.assertTrue(service.is_date("2024-01-01"))
         self.assertTrue(service.is_date("2024-02-29"))
         self.assertTrue(service.is_date("2024-01-01T10:00:00"))
+        self.assertTrue(service.is_date("2024-01-01 08:00"))
         self.assertFalse(service.is_date("2023-02-29"))
         self.assertFalse(service.is_date("2024-13-01"))
         self.assertFalse(service.is_date("2024-1-1"))
         self.assertFalse(service.is_date("not-a-date"))
         self.assertFalse(service.is_date(""))
+
+    def test_time_suffix_must_parse_as_a_datetime(self):
+        # The previous step's fix: a calendar-valid prefix followed by arbitrary
+        # text was accepted by the old permissive suffix match, so a mangled row
+        # such as ``2024-01-01 x`` was counted as a reading.  The whole field
+        # must now parse as an ISO-8601 datetime when a suffix is present.
+        for bad in (
+            "2024-01-01Tbogus",
+            "2024-01-01 x",
+            "2024-01-01T25:00:00",
+            "2024-01-01T08:00:00xyz",
+            "2024-01-01 ",
+            "2024-01-01T",
+        ):
+            with self.subTest(bad=bad):
+                self.assertFalse(service.is_date(bad))
+        for good in (
+            "2024-01-01T08:30:00",
+            "2024-01-01 08:00",
+            "2024-01-01T08:00:00.123456",
+            "2024-01-01T08:00:00Z",
+        ):
+            with self.subTest(good=good):
+                self.assertTrue(service.is_date(good))
 
     def test_temperatures(self):
         self.assertTrue(service.is_temperature("10.4"))

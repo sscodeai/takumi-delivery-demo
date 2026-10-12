@@ -86,11 +86,14 @@ class TestRunnerEntryTests(unittest.TestCase):
         self.assertTrue(os.access(RUNNER, os.X_OK))
 
     def test_mutation_entry_point_exists_and_is_executable(self):
-        # REL-005: the acceptance judge runs `bash mutation-test.sh`; the entry
-        # point must be present at the repository root for the host to run it.
-        mutation = os.path.join(ROOT, "mutation-test.sh")
-        self.assertTrue(os.path.isfile(mutation))
-        self.assertTrue(os.access(mutation, os.X_OK))
+        # REL-005: the acceptance judge runs `bash mutation.sh` (the name the
+        # confirmed document declares) and the earlier `bash mutation-test.sh`;
+        # both entry points must be present and executable at the root.
+        for name in ("mutation.sh", "mutation-test.sh"):
+            with self.subTest(entry_point=name):
+                mutation = os.path.join(ROOT, name)
+                self.assertTrue(os.path.isfile(mutation), mutation)
+                self.assertTrue(os.access(mutation, os.X_OK), mutation)
 
     def test_runner_is_valid_bash(self):
         result = subprocess.run(

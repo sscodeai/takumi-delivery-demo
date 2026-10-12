@@ -186,6 +186,28 @@ class MalformedRowTests(unittest.TestCase):
             self.assertEqual(skipped, 1)
             self.assertEqual(objects[0]["station"], "ALPHA")
 
+    def test_a_trailing_fragment_after_the_date_is_malformed(self):
+        # The previous step's fix at the HTTP boundary: a calendar-valid prefix
+        # followed by arbitrary text used to be counted as a reading.  Through
+        # the real service it must be skipped (AMB-001) and never aggregated.
+        text = (
+            HEADER
+            + "2024-01-01Tbogus,ALPHA,1.0\n"
+            + "2024-01-01 x,ALPHA,1.0\n"
+            + "2024-01-01T25:00:00,ALPHA,1.0\n"
+            + "2024-01-01T08:30:00,ALPHA,2.0\n"
+        )
+        with running_service(text) as service:
+            objects, skipped, total = service.report()
+            self.assertEqual(objects[0]["station"], "ALPHA")
+            self.assertEqual(objects[0]["count"], 1)
+            self.assertEqual(objects[0]["min"], "2.0")
+            self.assertEqual(objects[0]["max"], "2.0")
+            self.assertEqual(objects[0]["mean"], "2.0")
+            self.assertEqual(skipped, 3)
+            self.assertEqual(total, 1)
+            self.assertEqual(service.request_status(), 200)
+
     def test_malformed_rows_never_change_an_aggregate(self):
         clean = HEADER + "2024-01-01,ALPHA,1.0\n2024-01-02,ALPHA,3.0\n"
         dirty = clean + "2024-01-03,ALPHA,xx\n2024-01-04,,9.9\n"

@@ -28,14 +28,14 @@ import csv
 import json
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 # A well-formed date is a zero-padded ISO-8601 calendar date, optionally followed
 # by a time suffix.  The calendar part must name a real day.
-DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})(?:[T ].*)?$")
+DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})(.*)$")
 
 # A well-formed temperature is a plain decimal number with an optional sign.
 # Thousand separators, blanks, hex, NaN, Infinity and exponent notation are not
@@ -64,13 +64,28 @@ if hasattr(sys, "set_int_max_str_digits"):
 
 
 def is_date(text):
-    """True when the field is a calendar-valid ISO-8601 date."""
+    """True when the field is a calendar-valid ISO-8601 date.
+
+    A bare ``YYYY-MM-DD`` is accepted, and so is the same date followed by a
+    ``T`` or a space and a time: the whole string must then parse as an
+    ISO-8601 datetime, so a trailing fragment such as ``2024-01-01 x`` is
+    rejected instead of being waved through by a permissive suffix match.
+    """
     match = DATE_RE.match(text)
     if match is None:
         return False
-    year, month, day = (int(part) for part in match.groups())
+    year, month, day = (int(part) for part in match.groups()[:3])
     try:
         date(year, month, day)
+    except ValueError:
+        return False
+    suffix = match.group(4)
+    if suffix == "":
+        return True
+    if suffix[0] not in "T ":
+        return False
+    try:
+        datetime.fromisoformat(text)
     except ValueError:
         return False
     return True

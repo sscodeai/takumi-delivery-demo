@@ -147,14 +147,19 @@ and every confirmed decision in the requirement document.
 
 ### Mutation harness
 
-REQ-005 requires the delivered tests to be able to fail. `bash mutation-test.sh`
-(`mutation/mutation_test.py`) copies the project into a throwaway directory,
+The confirmed document's REL-005 / REQ-008 require the delivered tests to be
+able to fail. The declared entry point is `bash mutation.sh`
+(`mutation/mutation_test.py`); `bash mutation-test.sh` is kept as the earlier
+name for the same harness. It copies the project into a throwaway directory,
 applies one deliberate defect to `summary.sh` at a time — a broken rounding
 boundary, a reversed station order, an accepted malformed row, a lost duplicate
-count, and so on — and runs the delivered CLI test suite against each mutant. It
-writes the declared `reports/mutation/mutation.json` report in the
-`survivors-json` shape (`{"total": <int>, "survivors": [...]}`) and exits
-non-zero when any mutant survives. The confirmed requirement allows zero
+count, a swapped minimum or maximum, a corrupted mean, and so on — and runs the
+delivered CLI test suite against each mutant.
+
+It writes the declared `reports/mutation/survivors.json` report in the
+`survivors-json` shape (`{"total": <int>, "survivors": [...]}`), and mirrors the
+same report to `reports/mutation/mutation.json` for readers of the earlier name,
+exiting non-zero when any mutant survives. The confirmed requirement allows zero
 survivors; the report records the mutant count the run measured so a run that
 measured nothing cannot look green.
 

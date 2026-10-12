@@ -88,6 +88,22 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "ALPHA 1 1.0 1.0 1.0\nSKIPPED 0\nTOTAL 1\n")
 
+    def test_a_trailing_fragment_after_the_date_is_not_a_reading(self):
+        # A permissive suffix match would wave ``2024-01-01 x`` through. The time
+        # suffix is only valid when the whole field parses as an ISO-8601
+        # datetime, so a calendar-valid prefix followed by garbage is malformed
+        # and is skipped like any other bad date.
+        text = (
+            HEADER
+            + "2024-01-01Tbogus,ALPHA,1.0\n"
+            + "2024-01-01 x,ALPHA,1.0\n"
+            + "2024-01-01T25:00:00,ALPHA,1.0\n"
+            + "2024-01-01T08:30:00,ALPHA,2.0\n"
+        )
+        result = run_csv(text)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "ALPHA 1 2.0 2.0 2.0\nSKIPPED 3\nTOTAL 1\n")
+
     def test_impossible_and_malformed_dates_are_rejected(self):
         text = (
             HEADER

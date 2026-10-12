@@ -40,3 +40,20 @@ jobs:
             fi
             exit "$rc"
           }
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run the declared mutation entry point the requirement document names
+        run: |
+          # The document declares `bash mutation.sh` writing
+          # reports/mutation/survivors.json with zero survivors tolerated, so a
+          # mutant the delivered tests still pass fails this job.
+          set -o pipefail
+          timeout 900s bash mutation.sh 2>&1 | tail -40 || {
+            rc=$?
+            if [ "$rc" = 124 ]; then
+              echo 'the mutation harness did not exit within 900s and was killed: bash mutation.sh' >&2
+            fi
+            exit "$rc"
+          }

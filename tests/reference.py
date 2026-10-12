@@ -9,7 +9,7 @@ contract: an error in one is unlikely to be repeated by the other.
 """
 
 import re
-from datetime import date
+from datetime import date, datetime
 from fractions import Fraction
 
 HEADER = "date,station,temperature_c"
@@ -17,7 +17,7 @@ HEADER = "date,station,temperature_c"
 # The document declares the date column as a date and the measure column as a
 # number. The tool accepts a zero-padded ISO-8601 date with an optional time
 # suffix and a plain (non-exponent) decimal temperature.
-DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})(?:[T ].*)?$")
+DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})(.*)$")
 TEMP_RE = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
 HEADER_NAMES = ("date", "station", "temperature_c")
 
@@ -26,9 +26,18 @@ def is_date(text):
     match = DATE_RE.match(text)
     if match is None:
         return False
-    year, month, day = (int(part) for part in match.groups())
+    year, month, day = (int(part) for part in match.groups()[:3])
     try:
         date(year, month, day)
+    except ValueError:
+        return False
+    suffix = match.group(4)
+    if suffix == "":
+        return True
+    if suffix[0] not in "T ":
+        return False
+    try:
+        datetime.fromisoformat(text)
     except ValueError:
         return False
     return True
