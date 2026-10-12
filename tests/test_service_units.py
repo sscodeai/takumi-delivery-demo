@@ -31,6 +31,14 @@ def write_csv(text):
     return handle.name
 
 
+def write_csv_bytes(payload):
+    """Write raw bytes, for a file that is readable but not valid UTF-8."""
+    handle = tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False)
+    handle.write(payload)
+    handle.close()
+    return handle.name
+
+
 def report_lines(text):
     """Summarise ``text`` and return the JSON objects it reports."""
     path = write_csv(text)
@@ -175,6 +183,22 @@ class SummariseTests(unittest.TestCase):
             os.unlink(path)
         self.assertIn('{"skipped":1}', body)
         self.assertIn('{"total":1}', body)
+
+    def test_undecodable_bytes_are_skipped_and_never_abort_the_report(self):
+        payload = (
+            b"date,station,temperature_c\n"
+            b"2024-01-01,ALPHA,1.0\n"
+            b"2024-01-02,\xff\xfe,2.0\n"
+            b"2024-01-03,ALPHA,3.0\n"
+        )
+        path = write_csv_bytes(payload)
+        try:
+            body = service.summarise(path).decode("utf-8")
+        finally:
+            os.unlink(path)
+        self.assertIn('{"skipped":1}', body)
+        self.assertIn('{"total":2}', body)
+        self.assertIn('"count":2', body)
 
     def test_a_missing_file_raises_an_oserror(self):
         with self.assertRaises(OSError):

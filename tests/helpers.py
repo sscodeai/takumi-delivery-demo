@@ -37,6 +37,29 @@ def run_csv(text, env=None, cwd=None, timeout=180):
         os.unlink(handle.name)
 
 
+def run_csv_bytes(payload, env=None, cwd=None, timeout=180):
+    """Write raw bytes to a temporary CSV and run the deliverable on it.
+
+    A readable CSV export is not guaranteed to be valid UTF-8, so the entry
+    point's contract (exit 0, never abort) has to hold on a byte-mangled file
+    too. This helper lets a test drive the entry point on such bytes.
+    """
+    handle = tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False)
+    try:
+        handle.write(payload)
+        handle.close()
+        return subprocess.run(
+            ["bash", SCRIPT, handle.name],
+            cwd=cwd or ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+    finally:
+        os.unlink(handle.name)
+
+
 def station_lines(stdout):
     return [
         line

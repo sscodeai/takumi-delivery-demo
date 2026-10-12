@@ -123,6 +123,29 @@ permutation/differential property suite and drives `summary.sh` through the same
 reference. Together they cover every requirement and every confirmed decision in
 the requirement document.
 
+### Mutation testing
+
+The requirement document declares a `mutation-detection` relation (`REL-005`):
+the delivered tests must fail when the delivered aggregation behaviour is
+mutated. `mutation/run.sh` is the tool behind that relation.
+
+```sh
+bash mutation/run.sh
+```
+
+It copies the project into a throwaway directory, applies one deliberate defect
+at a time to `summary.sh` (rounding, ordering, malformed-row handling, header
+consumption, aggregation), runs the delivered suite against the mutant and
+writes the survivor report the document declares:
+
+```json
+{"total": 11, "survivors": []}
+```
+
+The report lives at `reports/mutation.json` in the declared `survivors-json`
+shape with a budget of zero survivors. The run never rewrites the working
+`summary.sh`: every mutant lives in the copy.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs the delivered project's own tests
