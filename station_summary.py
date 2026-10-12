@@ -134,7 +134,9 @@ def aggregate(path):
     header_seen = False
     date_i, station_i, temperature_i = 0, 1, 2
 
-    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+    # Decode with replacement so an undecodable byte can never abort the run
+    # (REQ-005): it turns the affected field into a malformed value instead.
+    with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         reader = csv.reader(handle)
         while True:
             try:

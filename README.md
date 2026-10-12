@@ -81,8 +81,8 @@ Malformed rows never abort the run.
 ### Why this stack
 
 Bash plus Python 3's standard library needs no install step and runs on any
-developer laptop. Temperatures are kept as exact `Decimal` values and rendered
-through exact integer arithmetic, so the half-away-from-zero rule is not
+developer laptop. Temperatures are kept as exact rational (`fractions.Fraction`)
+values and rendered through exact integer arithmetic, so the half-away-from-zero rule is not
 distorted by binary floating point and the accumulated sum is independent of the
 row order. The tool reads exactly one local file, makes no network call and
 streams the CSV, so a year of readings (about 200,000 rows) is summarised in
