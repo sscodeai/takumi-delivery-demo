@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: write the sample input the requirement document declares
         run: |
+          # The exact data rows under deliverable.input_format.sample, in the
+          # document's order, so the pipeline's world cannot drift from it.
           cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
           2024-01-01,ALPHA,10.4
           2024-01-01,BRAVO,-2.5
