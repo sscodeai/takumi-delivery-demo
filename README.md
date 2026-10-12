@@ -147,10 +147,12 @@ and every confirmed decision in the requirement document.
 
 ### Mutation harness
 
-The confirmed document's REL-005 / REQ-008 require the delivered tests to be
-able to fail. The declared entry point is `bash mutation.sh`
-(`mutation/mutation_test.py`); `bash mutation-test.sh` is kept as the earlier
-name for the same harness. It copies the project into a throwaway directory,
+The confirmed document (`docs/requirements/intake.yaml`) does not ask for a
+mutation harness; this is an extra quality gate the delivery adds on top of its
+requirements, so that a suite that only looks green cannot pass unnoticed. The
+entry point is `bash mutation.sh` (`mutation/mutation_test.py`);
+`bash mutation-test.sh` is kept as the earlier name for the same harness. It
+copies the project into a throwaway directory,
 applies one deliberate defect to `summary.sh` at a time — a broken rounding
 boundary, a reversed station order, an accepted malformed row, a lost duplicate
 count, a swapped minimum or maximum, a corrupted mean, and so on — and runs the
@@ -159,7 +161,7 @@ delivered CLI test suite against each mutant.
 It writes the declared `reports/mutation/survivors.json` report in the
 `survivors-json` shape (`{"total": <int>, "survivors": [...]}`), and mirrors the
 same report to `reports/mutation/mutation.json` for readers of the earlier name,
-exiting non-zero when any mutant survives. The confirmed requirement allows zero
+exiting non-zero when any mutant survives. The harness holds itself to zero
 survivors; the report records the mutant count the run measured so a run that
 measured nothing cannot look green.
 
@@ -172,7 +174,7 @@ measured nothing cannot look green.
 declares, runs it as `bash summary.sh takumi-sample.csv` under a `timeout`, and
 diffs the printed report against the declared `ALPHA`/`BRAVO`/`SKIPPED`/`TOTAL`
 lines; and
-- `mutation` runs the declared mutation gate (`bash mutation.sh`), which must
+- `mutation` runs the extra mutation gate (`bash mutation.sh`), which must
 record zero survivors on `reports/mutation/survivors.json`.
 
 The delivered command is bounded with `timeout`, so a tool that never exits
