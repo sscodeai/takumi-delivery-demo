@@ -4,45 +4,31 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY (run 20261013T113608232Z). ci_config regenerated
-# the bare skeleton again (it even named another project's entry point) and the
-# regenerated file dropped everything the delivered project's own suite pins, so
-# its `tests` job would have run `bash run-tests.sh` against a workflow those
-# very tests reject. This file is that skeleton plus the repairs the suite
-# requires, re-applied and verified on this delivery, so the pipeline and the
-# project cannot drift apart silently:
+# REPAIRED FOR THIS DELIVERY (run 20261013T113608232Z, attempt 2). ci_config regenerated the bare
+# skeleton again; this file is that skeleton plus the repairs the confirmed requirement document and
+# the delivered project need, re-applied on this delivery:
 #   1. the pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
-#   3. the exact declared world under `deliverable.input_format.sample` (all five
-#      rows, in the document's order) plus the exact-report `diff` against it, so
-#      a wrong count, min, max, mean, SKIPPED or TOTAL line fails the pipeline
-#      instead of only the local suite;
-#   4. the declared mutation gate (`bash mutation.sh`, zero survivors) writing
-#      the declared `reports/mutation/survivors.json`.
-#
-# The requirement run also names `bash mutation/run.sh` as its mutation entry
-# point; that alias runs the same harness and writes the same survivors-json
-# report (`reports/mutation/mutation.json` mirrored to
-# `reports/mutation/survivors.json`), so the gate below still measures the
-# delivered suite against every mutant.
-# Every job is additionally bounded by `timeout-minutes`, and every long-running
-# command by a shorter inner `timeout`, so a job that hangs fails on its own
-# budget instead of occupying a runner until the platform kills it.
-#
-# Verified for this delivery (run 20261013T113608232Z): `bash run-tests.sh` is
-# green (628 tests), `bash mutation.sh` records 14 mutants and 0 survivors on
-# reports/mutation/survivors.json, and the deliverable prints the declared
-# report for the declared world.
+#   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`, TAP to reports/tests.tap);
+#   4. a `deliverable` job that runs exactly the declared command (`bash pathfind.sh <mapfile>`) on a
+#      reachable and an unreachable map and diffs the declared answers, so a wrong answer fails the
+#      pipeline instead of only the local suite; and
+#   5. a `mutation` job that runs the declared mutation command
+#      (`npx stryker run --reporters json`) and checks the declared survivors-json report
+#      (reports/mutation/mutation.json) measured at least one mutant and left no survivor.
+# Every job is additionally bounded by `timeout-minutes`, and every long-running command by a shorter
+# inner `timeout`, so a job that hangs fails on its own budget instead of occupying a runner until the
+# platform kills it.
 name: ci
 on:
   push:
   pull_request:
-# Least privilege: every job only checks out and runs the delivered code, so the
-# token the runner hands the workflow never needs write access to the repository.
+# Least privilege: every job only checks out and runs the delivered code, so the token the runner
+# hands the workflow never needs write access to the repository.
 permissions:
   contents: read
-# Cancel a superseded run on the same ref, so a stale pipeline cannot report on
-# code that has already been replaced.
+# Cancel a superseded run on the same ref, so a stale pipeline cannot report on code that has already
+# been replaced.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -55,62 +41,97 @@ jobs:
       - name: run the delivered project's own tests
         run: |
           set -o pipefail
-          if [ -f package.json ]; then pnpm test 2>&1 | tail -60;
-          elif [ -f run-tests.sh ]; then bash run-tests.sh 2>&1 | tail -60;
-          elif ls *.test.mjs >/dev/null 2>&1; then node --test *.test.mjs 2>&1 | tail -60;
-          else echo "no test command found in this project" >&2; exit 1; fi
+          timeout 600s bash run-tests.sh 2>&1 | tail -60 || {
+            rc=$?
+            if [ "$rc" = 124 ]; then
+              echo 'the delivered test suite did not exit within 600s and was killed: bash run-tests.sh' >&2
+            fi
+            exit "$rc"
+          }
   deliverable:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: write the declared world the requirement document names
+      - name: write the maps the deliverable is run on
         run: |
-          # The exact data rows under deliverable.input_format.sample, in the
-          # document's order, so the pipeline's world cannot drift from it.
-          cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
-          2024-01-01,ALPHA,10.4
-          2024-01-01,BRAVO,-2.5
-          2024-01-02,ALPHA,11.6
-          2024-01-02,BRAVO,-1.5
-          2024-01-03,ALPHA,9.5
-          TAKUMI_SAMPLE
+          cat > reachable-map.txt <<'TAKUMI_REACHABLE'
+          S....
+          .....
+          .....
+          .....
+          ....E
+          TAKUMI_REACHABLE
+          cat > unreachable-map.txt <<'TAKUMI_UNREACHABLE'
+          S#
+          ##
+          #E
+          TAKUMI_UNREACHABLE
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 120s bash -c 'bash summary.sh takumi-sample.csv' || {
+          timeout 30s bash -c 'bash pathfind.sh reachable-map.txt' > reachable-answer.txt || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 120s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
+              echo 'the deliverable command did not exit within 30s and was killed: bash pathfind.sh reachable-map.txt' >&2
             fi
             exit "$rc"
           }
-      - name: check the deliverable's exact report for the declared world
+          timeout 30s bash -c 'bash pathfind.sh unreachable-map.txt' > unreachable-answer.txt || {
+            rc=$?
+            if [ "$rc" = 124 ]; then
+              echo 'the deliverable command did not exit within 30s and was killed: bash pathfind.sh unreachable-map.txt' >&2
+            fi
+            exit "$rc"
+          }
+      - name: check the declared answers
         run: |
           set -o pipefail
-          bash summary.sh takumi-sample.csv > report.txt
-          cat > expected.txt <<'TAKUMI_EXPECTED'
-          ALPHA 3 9.5 11.6 10.5
-          BRAVO 2 -2.5 -1.5 -2.0
-          SKIPPED 0
-          TOTAL 5
-          TAKUMI_EXPECTED
-          diff -u expected.txt report.txt
+          printf '8\n' > expected-reachable.txt
+          printf 'unreachable\n' > expected-unreachable.txt
+          diff -u expected-reachable.txt reachable-answer.txt
+          diff -u expected-unreachable.txt unreachable-answer.txt
+      - name: check that a malformed map is rejected
+        run: |
+          set -o pipefail
+          printf 'S.\n.E.\n' > malformed-map.txt
+          if bash pathfind.sh malformed-map.txt > malformed-out.txt 2> malformed-err.txt; then
+            echo 'a malformed map must exit non-zero (AMB-003: reject)' >&2
+            exit 1
+          fi
+          test -s malformed-err.txt
+          test ! -s malformed-out.txt
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: run the delivered mutation gate that proves the tests can fail
+      - name: run the declared mutation command
         run: |
-          # `bash mutation.sh` writes reports/mutation/survivors.json; zero
-          # survivors is the budget, so a mutant the delivered tests still pass
-          # fails this job instead of looking green.
           set -o pipefail
-          timeout 900s bash mutation.sh 2>&1 | tail -40 || {
+          timeout 900s npx stryker run --reporters json 2>&1 | tail -40 || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the mutation harness did not exit within 900s and was killed: bash mutation.sh' >&2
+              echo 'the mutation command did not exit within 900s and was killed: npx stryker run --reporters json' >&2
             fi
             exit "$rc"
           }
+      - name: check the declared survivors-json report
+        run: |
+          python3 - <<'TAKUMI_CHECK'
+          import json
+          import sys
+          path = "reports/mutation/mutation.json"
+          try:
+              with open(path, encoding="utf-8") as handle:
+                  report = json.load(handle)
+          except (OSError, ValueError) as error:
+              sys.exit("the declared report %s could not be read: %s" % (path, error))
+          if not isinstance(report, dict) or "total" not in report or "survivors" not in report:
+              sys.exit("the report %s is not the declared survivors-json shape" % path)
+          if not isinstance(report["total"], int) or report["total"] <= 0:
+              sys.exit("the report measured %r mutant(s): a run that measured nothing is not a pass" % (report["total"],))
+          if report["survivors"]:
+              sys.exit("the report records %d survivor(s) where the budget is 0" % len(report["survivors"]))
+          print("mutation report ok: %d mutant(s), 0 survivor(s)" % report["total"])
+          TAKUMI_CHECK

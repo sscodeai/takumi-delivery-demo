@@ -1,195 +1,121 @@
-requirements:
-  - id: REQ-001
-    title: "Provide the summary.sh entry point"
-    description: "The deliverable must be a script named summary.sh at the repository root, run as `bash summary.sh <csv>`, where the CSV path is the first positional argument ($1). It reads that local file, writes the summary to stdout, and exits 0 when the file was processed successfully."
-    acceptance_criteria:
-      - "A file named summary.sh exists at the repository root and is invoked as `bash summary.sh {csv}`."
-      - "The input path is taken from $1; no other arguments are required."
-      - "On a readable input file the process exits with status 0."
-    priority: High
-    source: "Request: 'a small command-line tool that reads a CSV export'"
-  - id: REQ-002
-    title: "Parse the daily temperature CSV"
-    description: "The input is a CSV whose header line names the columns `date`, `station`, `temperature_c`; every following line is one daily reading. A row is well-formed when it has three fields, a non-empty station id, a parseable date and a numeric temperature in degrees Celsius."
-    acceptance_criteria:
-      - "The header line `date,station,temperature_c` is consumed and is not treated as a reading."
-      - "Each following row with a parseable date, a non-empty station and a numeric temperature_c counts as exactly one reading for that station."
-    priority: High
-    source: "Request: 'reads a CSV export of daily temperature readings (date,station,temperature_c)'"
-  - id: REQ-003
-    title: "Print one aggregate line per station"
-    description: "For every station with at least one valid reading, print exactly one line `<station> <count> <min> <max> <mean>`. count is the number of the station's valid readings, min and max the smallest and largest temperature_c, mean the arithmetic mean of those values; min, max and mean are each rendered with exactly one decimal place."
-    acceptance_criteria:
-      - "The line matches `<station> <count> <min> <max> <mean>` with single spaces."
-      - "count equals the number of valid readings for that station."
-      - "min and max are the smallest and largest temperature_c values of that station."
-      - "mean equals the arithmetic mean of that station's values."
-      - "min, max and mean each carry exactly one digit after the decimal point."
-    priority: High
-    source: "Request: 'prints, per station, how many readings there were, the lowest, the highest and the mean temperature in degrees Celsius with one decimal place'"
-  - id: REQ-004
-    title: "Print the overall total"
-    description: "After the station lines, print exactly one line `TOTAL <count>` where count is the number of valid readings across all stations."
-    acceptance_criteria:
-      - "Exactly one `TOTAL <count>` line is printed."
-      - "The printed total equals the sum of the per-station counts."
-    priority: High
-    source: "Request: 'print the number of rows across all stations'"
-  - id: REQ-005
-    title: "Account for malformed rows without crashing"
-    description: "Rows that cannot be parsed (wrong field count, empty station, unparseable date, non-numeric temperature) must never abort the tool. Their handling is settled by AMB-001: with the default they are skipped, excluded from every aggregate, and counted on a `SKIPPED <count>` line."
-    acceptance_criteria:
-      - "A fixture containing malformed rows is processed to completion and the process exits 0."
-      - "Malformed rows never produce a station line and never change a count, min, max or mean."
-      - "Under the default decision the number of skipped rows is printed as `SKIPPED <count>`."
-    priority: High
-    source: "Request: 'Rows that cannot be parsed should be handled sensibly rather than crashing the tool'"
-  - id: REQ-006
-    title: "Row-order-independent output"
-    description: "The summary depends only on the multiset of data rows, not on their order; permuting the data rows must not change any station line, the skipped count or the total."
-    acceptance_criteria:
-      - "Permuting the data rows of a fixture yields byte-identical output."
-    priority: High
-    source: "Derived: a stable total requires order-independent aggregation"
-  - id: REQ-007
-    title: "Station line ordering"
-    description: "Station lines are emitted in ascending station id order (byte-wise lexicographic). This decision (AMB-004) is recorded but not blocking, and no judge currently checks the ordering."
-    acceptance_criteria:
-      - "Station lines appear in ascending byte-wise station id order."
-    priority: Low
-    source: "Derived: output has to be deterministic; ordering is a presentation choice"
-  - id: REQ-008
-    title: "Offline operation"
-    description: "The tool runs on a developer laptop with no network access and makes no network calls."
-    acceptance_criteria:
-      - "With the network disabled the tool produces the same output as with it enabled."
-    priority: Medium
-    source: "Request: 'run on a developer laptop with no network access'"
-  - id: REQ-009
-    title: "Performance on a year of readings"
-    description: "A fixture of about 200,000 rows completes in a couple of seconds on a developer laptop."
-    acceptance_criteria:
-      - "Processing a 200,000-row fixture finishes within a few seconds."
-    priority: Medium
-    source: "Request: 'a year of readings (about 200,000 rows) should finish in a couple of seconds'"
-
-ambiguities:
-  - id: AMB-001
-    question: "How are unparseable rows handled?"
-    options:
-      - "skip-count: skipped, counted on a `SKIPPED <count>` line, excluded from station stats and TOTAL"
-      - "skip-silent: skipped silently with no count printed, excluded from station stats and TOTAL"
-      - "stop-error: the first unparseable row aborts the run with a non-zero exit"
-    default: "skip-count: skipped, counted on a `SKIPPED <count>` line, excluded from station stats and TOTAL"
-    checkedAs: skip-count
-    blocking: true
-    chosen: "skip-count: skipped, counted on a `SKIPPED <count>` line, excluded from station stats and TOTAL"
-  - id: AMB-002
-    question: "When the same (date, station) key appears more than once, what wins?"
-    options:
-      - "merge: each occurrence remains a separate valid reading and all contribute to the aggregate"
-      - "first-row: only the first occurrence of a (date, station) key is kept"
-      - "last-row: only the last occurrence of a (date, station) key is kept"
-      - "error: a repeated (date, station) key is treated as malformed"
-    default: "merge: each occurrence remains a separate valid reading and all contribute to the aggregate"
-    checkedAs: merge
-    blocking: true
-    chosen: "merge: each occurrence remains a separate valid reading and all contribute to the aggregate"
-  - id: AMB-003
-    question: "How are values that are not exactly representable at one decimal place rounded?"
-    options:
-      - "half-up: round half away from zero"
-      - "truncate: round toward zero, dropping extra digits"
-    default: "half-up: round half away from zero"
-    checkedAs: half-up
-    blocking: true
-    chosen: "half-up: round half away from zero"
-  - id: AMB-004
-    question: "In what order are the station lines printed?"
-    options:
-      - "ascending station id, byte-wise lexicographic"
-      - "order of first appearance in the input file"
-      - "unspecified"
-    default: "ascending station id, byte-wise lexicographic"
-    blocking: false
-    chosen: "ascending station id, byte-wise lexicographic"
-  - id: AMB-005
-    question: "What does the printed TOTAL count?"
-    options:
-      - "valid readings only: the sum of the per-station counts"
-      - "all data lines including malformed ones"
-    default: "valid readings only: the sum of the per-station counts"
-    blocking: true
-
-    chosen: "valid readings only: the sum of the per-station counts"
-deliverable:
-  run: "bash summary.sh {csv}"
-  # The world a judge builds its fixtures in (ADR-033): the columns and what they mean, plus a sample it
-  # reshuffles, duplicates and mangles. The judge computes every expectation from these rows, so the
-  # document — not the forge — decides which scenario gets judged.
-  input_format:
-    columns: "date:date,station:id,temperature_c:measure"
-    sample: |
-      2024-01-01,ALPHA,10.4
-      2024-01-01,BRAVO,-2.5
-      2024-01-02,ALPHA,11.6
-      2024-01-02,BRAVO,-1.5
-      2024-01-03,ALPHA,9.5
-  output_format:
-    station_line:
-      shape: "<station> <count> <min> <max> <mean>"
-      fields: [id, count, min, max, mean]
-    skipped_line:
-      shape: "SKIPPED <count>"
-      fields: [skipped-count]
-    total_line:
-      shape: "TOTAL <count>"
-      fields: [count]
-  relations:
-    - id: REL-001
-      relation: row-order-invariance
-      description: "Shuffling the data rows of a fixture yields byte-identical output: identical station lines, SKIPPED line and TOTAL line."
-    - id: REL-002
-      relation: additivity
-      description: "The per-station counts printed sum to the TOTAL count printed."
-      decides: AMB-005
-    - id: REL-003
-      relation: duplicate-resolution
-      description: "A fixture with repeated (date, station) rows is aggregated such that every occurrence counts as its own reading."
-      decides: AMB-002
-      checkedAs: merge
-    - id: REL-004
-      relation: malformed-row-accounting
-      description: "A fixture with unparseable rows completes with exit 0; the bad rows are excluded from all aggregates and reported on the SKIPPED line."
-      decides: AMB-001
-      checkedAs: skip-count
-  differential:
-    - id: DIFF-001
-      anchor: independent-aggregation
-      description: "An independent re-computation of each station's count, min, max and mean from the same readings, rounding half away from zero, must equal the tool's printed values."
-      decides: AMB-003
-      checkedAs: half-up
-
 confirmation:
   by: "SS"
-  at: "2026-10-05T14:20:59.744Z"
-  method: bounded-choice
-feedback:
-  - id: FB-001
-    at: "2026-10-01T14:55:52.547Z"
-    run: "wf-f6df8588"
-    requirementDigest: "021f16e4ac663db4658c54f583a155f0d5f772342cc4dc39c60a20f8e03cb93a"
-    judgeDigest: "sha256:9e7b78aff8274345428c7810d605bfdf07c4aff3c094dcd059a055aeca1e8ecb"
-    status: resolved
-    resolvedAt: "2026-10-05T02:49:51.509Z"
-    resolvedBy: "SS"
-    resolvedNote: "the recorded answer stands; the implementation changes (bounded choice at re-confirmation, 2026-10-05T02:49:51.509Z)"
-    checks:
-      - "REL-002 additivity: department totals sum to 0 but the report says  — sum=0 reported="
-      - "REL-003 duplicate-resolution: the chosen option \"merge\" does not hold (headcount 0 want 5, late-date total  want 628, early-date total  want 628) — headcount=0/5 totals=/628,/628"
-      - "REL-004 malformed-row-accounting: exit 0, headcount 0 (expected 4), skipped 8 (skip-count wants the count 3) — exit=0 headcount=0 skipped=8"
-      - "DIFF-001 independent-aggregation: an independent recomputation (rounding: half-up) disagrees with the report — 1,2c1 < Engineering 2 192 < Sales 2 236 --- >"
-      - "DEC-001 AMB-001 NOT honoured: \"skip-count: skipped, counted on a `SKIPPED <count>` line, excluded from station stats and TOTAL\" (checked by REL-004, which failed)"
-      - "DEC-002 AMB-002 NOT honoured: \"merge: each occurrence remains a separate valid reading and all contribute to the aggregate\" (checked by REL-003, which failed)"
-      - "DEC-003 AMB-003 NOT honoured: \"half-up: round half away from zero\" (checked by DIFF-001, which failed)"
-      - "DEC-004 AMB-005 NOT honoured: \"valid readings only: the sum of the per-station counts\" (checked by REL-002, which failed)"
+  at: "2026-10-13T11:36:07.437Z"
+  method: standing-authorization
+  authorization:
+    ref: "docs/authorizations/SA-002.yaml"
+    digest: "sha256:8067ab6c79353785ff7161d3e9bef85b7994eb56a55b62102bee11eba1991551"
+    signedBy: "SS"
+    signedAt: "2026-10-12T02:38:35Z"
+    expiresAt: "2026-11-11T02:38:35Z"
+  defaulted:
+    - id: AMB-001
+      question: "Which moves are allowed between adjacent cells of the grid?"
+      chosen: "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+      class: unmechanised
+      policy: document-default
+    - id: AMB-002
+      question: "What does one step of the printed path length count?"
+      chosen: "edges: the number of moves made, so a start adjacent to the exit has length 1"
+      class: unmechanised
+      policy: document-default
+    - id: AMB-003
+      question: "How should a map that breaks the declared format be handled?"
+      chosen: "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+      class: unmechanised
+      policy: document-default
+
+requirements:
+  - id: REQ-001
+    title: "Provide the command-line entry point"
+    description: "The deliverable must provide an executable script named pathfind.sh at the repository root. It takes the grid-map file path as its first argument ($1) and, on success, writes exactly one answer line to stdout: either a non-negative integer path length or the lowercase word unreachable. It exits 0 when it produced an answer and non-zero on a rejected input."
+    acceptance_criteria:
+      - "bash pathfind.sh <map-file> reads the given file and writes exactly one line to stdout."
+      - "The success output is either an integer greater than or equal to 0 or the single lowercase token unreachable, with no other text on stdout."
+      - "The command exits 0 when it printed an answer and non-zero when it rejected the input."
+    priority: High
+    source: "a small command-line tool that reads a grid map from a text file ... prints the length ... or 'unreachable'"
+  - id: REQ-002
+    title: "Parse the grid-map text format"
+    description: "The tool must read a rectangular grid of characters where '#' is a wall, '.' is a free cell, 'S' is the start and 'E' is the exit. S and E cells are traversable. The map contains exactly one S and exactly one E. A map that violates these rules must be rejected with a non-zero exit and a diagnostic on stderr."
+    acceptance_criteria:
+      - "A map containing '#' and '.' cells with one 'S' and one 'E' is accepted and produces an answer."
+      - "The S cell and the E cell are treated as walkable cells for pathing purposes."
+      - "A map with no S, no E, more than one S, or more than one E causes a non-zero exit and a message on stderr."
+      - "Leading and trailing whitespace on each line, blank lines, and CRLF line endings do not change the parsed grid."
+    priority: High
+    source: "a grid map from a text file (walls '#', free cells '.', one start 'S' and one exit 'E')"
+  - id: REQ-003
+    title: "Print the shortest path length or unreachable"
+    description: "The tool must print the length of the shortest path from S to E measured in steps, where the allowed moves and the definition of a step are the ones recorded by the decisions AMB-001 and AMB-002 in this document. When no path connects S and E under the recorded movement rules, it must print the single lowercase token unreachable instead of a number."
+    acceptance_criteria:
+      - "For a map where a path exists, the printed number equals the shortest number of steps between S and E under the movement rules of AMB-001 and the step definition of AMB-002."
+      - "For a map where the exit is fully walled off from the start, the tool prints unreachable and exits 0."
+      - "A map whose shortest path length is 0 (start coincides with exit, if the format permits it) or any other non-negative integer is printed as a plain decimal integer."
+      - "No judge in this chain yet mechanises the choice between the movement options of AMB-001 or the step definitions of AMB-002; the delivered tests are the only automated check of that behaviour."
+    priority: High
+    source: "prints the length of the shortest path from S to E in steps, or 'unreachable'"
+  - id: REQ-004
+    title: "Ship an automated test suite with a TAP report"
+    description: "The deliverable must provide a test entry point run-tests.sh at the repository root that runs the project's own tests, exits 0 only when every test passes, and writes a TAP report to reports/tests.tap. The tests must assert the shortest path length for reachable maps, the unreachable case, and at least one wall-obstacle case."
+    acceptance_criteria:
+      - "bash run-tests.sh completes and writes a TAP report at reports/tests.tap."
+      - "The TAP report contains at least one passing assertion and no failing assertion for the delivered implementation."
+      - "The suite includes an assertion on a shortest path length that requires routing around walls, not merely a straight-line distance."
+      - "The suite includes an assertion that a map with no route prints unreachable."
+    priority: High
+    source: "implicit quality requirement: the answer must be checked by the tests the deliverable ships"
+  - id: REQ-005
+    title: "Make the declared mutation tool runnable in the worktree"
+    description: "The project must be set up so that the command declared in deliverable.mutation.run runs inside the delivery worktree without further setup and writes a survivors-json report to the declared mutation report path, reporting every surviving mutant of the delivered test suite. The implementation language and toolchain must be chosen so this declared command applies."
+    acceptance_criteria:
+      - "Running the declared mutation command in the worktree produces a readable report at reports/mutation/mutation.json."
+      - "The report conforms to the survivors-json shape with a total mutant count greater than zero and a survivors list."
+      - "The delivered test suite kills every mutant of the core pathfinding and map-parsing behaviour, so the survivors list is empty."
+    priority: Medium
+    source: "the request asks for a tool whose behaviour should be pinned down by its own tests, not only by a one-off run"
+ambiguities:
+  - id: AMB-001
+    question: "Which moves are allowed between adjacent cells of the grid?"
+    options:
+      - "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+      - "diagonal: the four edge-adjacent moves plus the four diagonal moves, each costing one step"
+    default: "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+    blocking: false
+    chosen: "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+  - id: AMB-002
+    question: "What does one step of the printed path length count?"
+    options:
+      - "edges: the number of moves made, so a start adjacent to the exit has length 1"
+      - "cells: the number of cells on the path including the start, so a start adjacent to the exit has length 2"
+    default: "edges: the number of moves made, so a start adjacent to the exit has length 1"
+    blocking: false
+    chosen: "edges: the number of moves made, so a start adjacent to the exit has length 1"
+  - id: AMB-003
+    question: "How should a map that breaks the declared format be handled?"
+    options:
+      - "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+      - "best-effort: treat unknown characters as walls and pad ragged rows, and answer whenever exactly one S and one E are present"
+    default: "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+    blocking: false
+    chosen: "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+deliverable:
+  run: "bash pathfind.sh {map}"
+  timeoutMs: 10000
+  scenarios:
+    - id: SCN-001
+      run: "bash run-tests.sh"
+      expect: "the delivered test suite passes and its report asserts shortest path lengths for reachable maps and the unreachable case"
+      report: tap
+      report_path: "reports/tests.tap"
+      description: "Run the delivered test suite and read its TAP report; a failing or unreadable report fails the scenario."
+  relations:
+    - id: REL-001
+      relation: mutation-detection
+      description: "The delivered tests fail when the delivered pathfinding or map-parsing behaviour is mutated."
+  mutation:
+    run: "npx stryker run --reporters json"
+    report_path: "reports/mutation/mutation.json"
+    format: survivors-json
+    max_survivors: 0
+    timeoutMs: 900000

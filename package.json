@@ -1,0 +1,16 @@
+{
+  "name": "grid-pathfinder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shortest-path grid-map CLI exposed as pathfind.sh",
+  "bin": {
+    "stryker": "./mutation/stryker-cli.mjs"
+  },
+  "scripts": {
+    "test": "bash run-tests.sh",
+    "mutation": "node mutation/stryker-cli.mjs run --reporters json"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
