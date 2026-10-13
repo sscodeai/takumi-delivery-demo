@@ -1,0 +1,81 @@
+{
+  "reportFormat": "CTRF",
+  "specVersion": "0.0.0",
+  "results": {
+    "tool": {
+      "name": "e2e/check.sh"
+    },
+    "summary": {
+      "tests": 10,
+      "passed": 10,
+      "failed": 0,
+      "pending": 0,
+      "skipped": 0,
+      "other": 0,
+      "start": 0,
+      "stop": 0
+    },
+    "tests": [
+      {
+        "name": "REQ-001 summary.sh exits 0 on a readable input file",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-002..005 the printed report equals an independent recomputation",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-003 exactly one TOTAL line",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-004 exactly one SKIPPED line",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-002 one station line per distinct station id",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-002 every line matches a declared output shape",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-002 station lines carry count, min, max, mean with one decimal place",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-002 station lines are in ascending byte-wise order",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REL-002 the per-station counts sum to the TOTAL count",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      },
+      {
+        "name": "REQ-006 the station set equals the recomputed station set",
+        "status": "passed",
+        "duration": 0,
+        "message": ""
+      }
+    ]
+  }
+}
