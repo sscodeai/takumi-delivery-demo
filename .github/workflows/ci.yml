@@ -4,60 +4,54 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY (run 20261013T135637681Z, attempt 1). ci_config regenerated the bare
-# skeleton and it again named another project's world: the deliverable step ran
-# `bash common-keys.sh {json}` (a literal placeholder no shell can execute) and the test step
-# preferred a package-manager command over the entry point the confirmed document declares. This
-# file is that skeleton plus the repairs docs/requirements/intake.yaml actually needs:
+# REPAIRED FOR THIS DELIVERY. ci_config regenerated the bare skeleton and it named the declared
+# deliverable, but left the generic placeholder `bash common-keys.sh {json}` (no shell can execute it)
+# and a package-manager-first test guess. This file is that skeleton repaired for the confirmed
+# document -- the JSON array of objects, one key per line or `none`:
 #   1. a pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
-#   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`, the declared SCN-001
-#      command), then reads the declared TAP report at reports/tests.tap, requires `TAP version 13`,
-#      at least one `ok` line, a positive `# pass` total, a `# fail 0` total and no `not ok` line
-#      (REQ-004 / SCN-001);
-#   4. a `deliverable` job that runs exactly the declared command (`bash pathfind.sh {map}`) on a
-#      reachable map, a map whose only route must detour around walls, and an unreachable map, and
-#      diffs the declared answers (REQ-003), then checks that a malformed map is rejected with a
-#      diagnostic on stderr and nothing on stdout (AMB-003); and
+#   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`, the declared SCN-001 command),
+#      then reads the declared TAP report at reports/tests.tap and requires TAP version 13, at least one
+#      `ok` line, a positive `# pass` total, `# fail 0` and no `not ok` line (REQ-006 / SCN-001);
+#   4. a `deliverable` job that runs the declared command (`bash common-keys.sh <file>`) on the
+#      all-shared, partially-shared and none worlds, diffs the declared answers (REQ-003/004/005), and
+#      checks that a malformed input is rejected with a diagnostic on stderr and nothing on stdout
+#      (AMB-002); and
 #   5. a `mutation` job that runs the declared mutation command
 #      (`npx stryker run --reporters json`) and checks the declared survivors-json report
-#      (reports/mutation/mutation.json) measured at least one mutant and left no survivor (REQ-005).
-# Every job is additionally bounded by `timeout-minutes`, and every long-running command by a shorter
-# inner `timeout`, so a job that hangs fails on its own budget instead of occupying a runner until
-# the platform kills it.
+#      (reports/mutation/mutation.json) measured at least one mutant and left no survivor (REQ-006 /
+#      REL-001).
+# Every job is bounded by `timeout-minutes` and every long command by a shorter inner `timeout`, so a
+# job that hangs fails on its own budget instead of occupying a runner until the platform kills it.
 name: ci
 on:
   push:
   pull_request:
-# Least privilege: every job only checks out and runs the delivered code, so the token the runner
-# hands the workflow never needs write access to the repository.
+# Least privilege: every job only checks out and runs the delivered code.
 permissions:
   contents: read
-# Cancel a superseded run on the same ref, so a stale pipeline cannot report on code that has already
-# been replaced.
+# Cancel a superseded run on the same ref, so a stale pipeline cannot report on replaced code.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: run the delivered project's own tests
         run: |
           set -o pipefail
-          timeout 600s bash run-tests.sh 2>&1 | tail -60 || {
+          timeout 300s bash run-tests.sh 2>&1 | tail -60 || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the delivered test suite did not exit within 600s and was killed: bash run-tests.sh' >&2
+              echo 'the delivered test suite did not exit within 300s and was killed: bash run-tests.sh' >&2
             fi
             exit "$rc"
           }
       - name: check the declared TAP report
         run: |
-          set -o pipefail
-          echo 'the run-tests.sh step above is the declared SCN-001 command; this step reads its report'
           python3 - <<'TAKUMI_TAP'
           import re
           import sys
@@ -71,8 +65,8 @@ jobs:
               sys.exit("the declared TAP report %s is not TAP version 13" % path)
           if re.search(r"^not ok", text, re.M):
               sys.exit("the declared TAP report %s records a failing assertion" % path)
-          passes = re.search(r"^# pass (\d+)$", text, re.M)
           tests = re.search(r"^# tests (\d+)$", text, re.M)
+          passes = re.search(r"^# pass (\d+)$", text, re.M)
           fails = re.search(r"^# fail (\d+)$", text, re.M)
           if not tests or not passes or int(passes.group(1)) <= 0:
               sys.exit("the declared TAP report %s records no passing assertion" % path)
@@ -87,36 +81,28 @@ jobs:
           TAKUMI_TAP
   deliverable:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: write the maps the deliverable is run on
+      - name: write the fixtures the deliverable is run on
         run: |
-          cat > reachable-map.txt <<'TAKUMI_REACHABLE'
-          S....
-          .....
-          .....
-          .....
-          ....E
-          TAKUMI_REACHABLE
-          cat > wall-map.txt <<'TAKUMI_WALL'
-          S.#
-          ..#
-          #.E
-          TAKUMI_WALL
-          cat > unreachable-map.txt <<'TAKUMI_UNREACHABLE'
-          S#
-          ##
-          #E
-          TAKUMI_UNREACHABLE
+          cat > all-shared.json <<'COMMON_KEYS_ALL'
+          [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+          COMMON_KEYS_ALL
+          cat > partial.json <<'COMMON_KEYS_PARTIAL'
+          [{"a": 1, "b": 2}, {"a": 3, "c": 4}]
+          COMMON_KEYS_PARTIAL
+          cat > no-common.json <<'COMMON_KEYS_NONE'
+          [{"x": 1}, {"y": 2}]
+          COMMON_KEYS_NONE
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          for map in reachable-map.txt wall-map.txt unreachable-map.txt; do
-            timeout 30s bash pathfind.sh "$map" > "$map.answer" || {
+          for input in all-shared.json partial.json no-common.json; do
+            timeout 10s bash common-keys.sh "$input" > "$input.out" || {
               rc=$?
               if [ "$rc" = 124 ]; then
-                echo "the deliverable command did not exit within 30s and was killed: bash pathfind.sh $map" >&2
+                echo "the deliverable did not exit within 10s and was killed: bash common-keys.sh $input" >&2
               fi
               exit "$rc"
             }
@@ -124,22 +110,22 @@ jobs:
       - name: check the declared answers
         run: |
           set -o pipefail
-          printf '8\n' > expected-reachable.txt
-          printf '4\n' > expected-wall.txt
-          printf 'unreachable\n' > expected-unreachable.txt
-          diff -u expected-reachable.txt reachable-map.txt.answer
-          diff -u expected-wall.txt wall-map.txt.answer
-          diff -u expected-unreachable.txt unreachable-map.txt.answer
-      - name: check that a malformed map is rejected
+          printf 'a\nb\n' > all-shared.expected
+          printf 'a\n' > partial.expected
+          printf 'none\n' > no-common.expected
+          diff -u all-shared.expected all-shared.json.out
+          diff -u partial.expected partial.json.out
+          diff -u no-common.expected no-common.json.out
+      - name: check that a malformed input is rejected
         run: |
           set -o pipefail
-          printf 'S.\n.E.\n' > malformed-map.txt
-          if bash pathfind.sh malformed-map.txt > malformed-out.txt 2> malformed-err.txt; then
-            echo 'a malformed map must exit non-zero (AMB-003: reject)' >&2
+          printf '[{"a": 1}, 2]\n' > malformed.json
+          if bash common-keys.sh malformed.json > malformed.out 2> malformed.err; then
+            echo 'a malformed input must exit non-zero (AMB-002: stop-error)' >&2
             exit 1
           fi
-          test -s malformed-err.txt
-          test ! -s malformed-out.txt
+          test -s malformed.err
+          test ! -s malformed.out
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -166,7 +152,7 @@ jobs:
                   report = json.load(handle)
           except (OSError, ValueError) as error:
               sys.exit("the declared report %s could not be read: %s" % (path, error))
-          if not isinstance(report, dict) or "total" not in report or "survivors" not in report:
+          if not isinstance(report, dict) or set(report) != {"total", "survivors"}:
               sys.exit("the report %s is not the declared survivors-json shape" % path)
           if not isinstance(report["total"], int) or report["total"] <= 0:
               sys.exit("the report measured %r mutant(s): a run that measured nothing is not a pass" % (report["total"],))

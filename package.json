@@ -1,8 +1,8 @@
 {
-  "name": "grid-pathfinder",
+  "name": "common-keys",
   "version": "1.0.0",
   "private": true,
-  "description": "Shortest-path grid-map CLI exposed as pathfind.sh",
+  "description": "Keys shared by every object in a JSON array, exposed as common-keys.sh",
   "bin": {
     "stryker": "./mutation/stryker-cli.mjs"
   },
