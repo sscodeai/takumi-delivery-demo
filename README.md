@@ -39,9 +39,10 @@ none
 ```
 
 The input is one JSON value: an array whose elements are objects. Anything else
--- a file that does not parse, a top-level value that is not an array, or an
-array element that is not an object -- is rejected (AMB-002). An array that
-holds no objects at all prints `none` and exits zero (AMB-003).
+-- a file that does not parse, a file that is not valid UTF-8, a top-level value
+that is not an array, or an array element that is not an object -- is rejected
+(AMB-002). An array that holds no objects at all prints `none` and exits zero
+(AMB-003).
 
 ## The recorded decisions
 
@@ -61,8 +62,9 @@ the implementation applies each one:
 - `common_keys.py` -- the JSON parsing and key-intersection logic, using only
   the Python 3 standard library. No install step, no network access, no stdin.
 - `tests/common_keys_tests.py` + `run-tests.sh` -- the delivered test suite; it
-  writes a TAP report to `reports/tests.tap` and exits 0 only when every case
-  passes.
+  drives the entry point and the in-process logic, cross-checks both against an
+  independent count-based oracle over random arrays, writes a TAP report to
+  `reports/tests.tap` and exits 0 only when every case passes.
 - `mutation/common_keys_mutation.py` + `mutation/stryker-cli.mjs` -- the
   mutation harness behind the declared `npx stryker run --reporters json`,
   which writes the survivors-json report to `reports/mutation/mutation.json`.

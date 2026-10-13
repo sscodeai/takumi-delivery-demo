@@ -25,12 +25,15 @@ when every case passes, so ``bash run-tests.sh`` is a gate.
 import importlib.util
 import json
 import os
+import random
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "common-keys.sh")
+RUNNER = os.path.join(ROOT, "run-tests.sh")
 REPORT = os.path.join(ROOT, "reports", "tests.tap")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "ci.yml")
 
@@ -449,6 +452,236 @@ def pipeline_runs_the_declared_commands():
     assert "npx stryker run --reporters json" in code, "the declared mutation command must run"
     assert "common-keys.sh {json}" not in code, "the placeholder must not survive"
     assert "pnpm test" not in code, "the pipeline must run the declared suite, not a guess"
+
+
+# --- independent verification layer -------------------------------------------
+#
+# The cases below re-verify the same contract with machinery written
+# independently of the delivered implementation: a count-based oracle instead
+# of the implementation's start-from-the-first-object-and-intersect loop, and a
+# seeded differential that compares that oracle with both the in-process logic
+# and the real entry point. A mistake shared by the implementation and the
+# delivered suite cannot cancel out here, because the oracle is derived from
+# the definition rather than from the code. The oracle also sorts with explicit
+# Unicode ordinals, a second expression of AMB-004.
+
+
+# The value alphabet deliberately includes nested objects and arrays, whose
+# keys AMB-001 says never count, and case/Unicode letters, which exercise
+# AMB-004. It is only ever used through the oracle and the entry point.
+def oracle_common_keys(objects):
+    """The common keys, counted rather than intersected.
+
+    A key is common exactly when it appears in as many objects as there are:
+    count it in every object, keep the counts equal to len(objects), then order
+    by explicit Unicode code point. This is the definition in the document, not
+    the implementation's algorithm.
+    """
+    counts = Counter()
+    for element in objects:
+        counts.update(element.keys())
+    total = len(objects)
+    return sorted(
+        (key for key, count in counts.items() if count == total),
+        key=lambda key: [ord(character) for character in key],
+    )
+
+
+def oracle_output(objects):
+    """The exact stdout the document declares for a JSON array of objects."""
+    keys = oracle_common_keys(objects)
+    if keys:
+        return "".join(key + "\n" for key in keys)
+    return "none\n"
+
+
+KEYS = ["a", "A", "b", "B", "z", "Z", "_", "1", "\u00e9", "\u03a9", ""]
+VALUES = [1, 2.5, "text", None, True, False, [1, 2], {"a": 1, "inner": 2}, {}]
+
+
+def random_objects(rng, max_objects=6, max_keys=6):
+    """Build a random JSON array of objects over the small alphabet above."""
+    objects = []
+    for _ in range(rng.randint(0, max_objects)):
+        element = {}
+        for _ in range(rng.randint(0, max_keys)):
+            element[rng.choice(KEYS)] = rng.choice(VALUES)
+        objects.append(element)
+    return objects
+
+
+@case
+def independent_oracle_is_not_trivially_constant():
+    """Guard the oracle itself, so the differential below cannot be vacuous."""
+    assert oracle_common_keys([]) == []
+    assert oracle_common_keys([{}, {}]) == []
+    assert oracle_common_keys([{"a": 1}, {"b": 2}]) == []
+    assert oracle_common_keys([{"b": 1, "a": 2}, {"a": 3, "b": 4}]) == ["a", "b"]
+    assert oracle_common_keys([{"A": 1, "a": 2}, {"A": 3, "a": 4}]) == ["A", "a"]
+
+
+@case
+def independent_oracle_matches_the_intersection_on_random_arrays():
+    rng = random.Random(0x5EED)
+    for _ in range(1000):
+        objects = random_objects(rng)
+        got = common_keys_module.common_keys(objects)
+        want = oracle_common_keys(objects)
+        assert got == want, "common_keys(%r) = %r, oracle = %r" % (objects, got, want)
+
+
+@case
+def independent_oracle_matches_the_entry_point_on_random_arrays():
+    rng = random.Random(0xC0FFEE)
+    for _ in range(40):
+        objects = random_objects(rng)
+        got = answer(json.dumps(objects))
+        want = oracle_output(objects)
+        assert got == want, "CLI on %r = %r, oracle = %r" % (objects, got, want)
+
+
+@case
+def independent_oracle_covers_the_declared_worlds():
+    """The all-shared, partially-shared and none worlds, through the oracle."""
+    assert oracle_output([{"a": 1, "b": 2}, {"a": 3, "b": 4}]) == "a\nb\n"
+    assert oracle_output([{"a": 1, "b": 2}, {"a": 3, "c": 4}]) == "a\n"
+    assert oracle_output([{"x": 1}, {"y": 2}]) == "none\n"
+
+
+@case
+def amb_001_nested_keys_do_not_enter_the_independent_oracle():
+    objects = [
+        {"outer": {"inner": 1, "a": 2}, "top": 1},
+        {"outer": {"inner": 3}, "top": 2},
+    ]
+    assert oracle_common_keys(objects) == ["outer", "top"]
+    assert answer(json.dumps(objects)) == "outer\ntop\n"
+
+
+@case
+def amb_002_a_file_that_is_not_utf8_is_a_clean_stop_error():
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "bad.json")
+        with open(path, "wb") as handle:
+            handle.write(b'[{"a": 1}, \xff\xfe]')
+        result = subprocess.run(
+            ["bash", ENTRY, path],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+    assert result.returncode != 0, "an undecodable file must exit non-zero"
+    assert result.stdout == "", "an undecodable file must print no key list"
+    assert result.stderr.strip() != "", "an undecodable file needs a diagnostic"
+    assert "Traceback" not in result.stderr, (
+        "the stop-error must be a diagnostic, not a crash: %s" % result.stderr
+    )
+
+
+@case
+def amb_002_a_utf8_bom_is_rejected_as_malformed():
+    # json.loads rejects a leading BOM rather than silently accepting it, so it
+    # is one more malformed class that must take the AMB-002 stop-error path.
+    expect_reject("\ufeff[]", "a BOM is not valid JSON")
+
+
+@case
+def amb_003_the_independent_oracle_prints_none_for_no_objects():
+    assert oracle_output([]) == "none\n"
+    assert answer("[]") == "none\n"
+    assert answer("[ ]") == "none\n"
+
+
+@case
+def amb_004_the_independent_oracle_orders_by_code_point():
+    objects = [{"b": 1, "A": 2, "a": 3, "B": 4, "1": 5, "_": 6}]
+    want = oracle_common_keys(objects)
+    assert want == ["1", "A", "B", "_", "a", "b"], want
+    assert answer(json.dumps(objects)) == "".join(key + "\n" for key in want)
+
+
+@case
+def req_001_a_directory_argument_is_a_stop_error():
+    result = run([tempfile.gettempdir()])
+    assert result.returncode != 0, "a directory argument must exit non-zero"
+    assert result.stdout == "", "a directory argument must print nothing on stdout"
+    assert result.stderr.strip() != "", "a directory argument needs a diagnostic"
+
+
+# --- the run-tests.sh gate ----------------------------------------------------
+
+
+def stub_suite(directory, name, report_path, tap, status):
+    """Write a tiny self-contained TAP suite that run-tests.sh can drive."""
+    path = os.path.join(directory, name)
+    source = (
+        "import sys\n"
+        "with open(%r, 'w', encoding='utf-8') as handle:\n"
+        "    handle.write(%r)\n"
+        "sys.exit(%d)\n" % (report_path, tap, status)
+    )
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(source)
+    return path
+
+
+def run_runner(test_file):
+    """Invoke run-tests.sh with its suite redirected to ``test_file``."""
+    env = dict(os.environ, COMMON_KEYS_TEST_FILE=test_file)
+    return subprocess.run(
+        ["bash", RUNNER],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+
+@case
+def req_006_the_runner_passes_a_green_suite_and_keeps_its_report():
+    with tempfile.TemporaryDirectory() as directory:
+        report = os.path.join(directory, "green.tap")
+        tap = "TAP version 13\n1..1\nok 1 - green\n# tests 1\n# pass 1\n# fail 0\n"
+        suite = stub_suite(directory, "green.py", report, tap, 0)
+        result = run_runner(suite)
+        assert result.returncode == 0, result.stderr
+        with open(report, encoding="utf-8") as handle:
+            assert handle.read() == tap
+
+
+@case
+def req_006_the_runner_fails_when_its_suite_fails():
+    with tempfile.TemporaryDirectory() as directory:
+        report = os.path.join(directory, "red.tap")
+        tap = "TAP version 13\n1..1\nnot ok 1 - red\n# tests 1\n# pass 0\n# fail 1\n"
+        suite = stub_suite(directory, "red.py", report, tap, 1)
+        result = run_runner(suite)
+        assert result.returncode != 0, "a failing suite must make the runner exit non-zero"
+        with open(report, encoding="utf-8") as handle:
+            assert "not ok 1" in handle.read()
+
+
+@case
+def req_006_the_runner_rejects_a_missing_suite_file():
+    missing = os.path.join(ROOT, "no-such-suite.py")
+    result = run_runner(missing)
+    assert result.returncode != 0, "a missing suite file must fail the runner"
+    assert result.stderr.strip() != "", "the runner should explain the missing file"
+
+
+@case
+def req_006_the_tap_renderer_reports_the_pass_and_fail_totals():
+    text = tap_report([("a", True, ""), ("b", False, "boom"), ("c", True, "")])
+    assert text.startswith("TAP version 13\n1..3\n"), text
+    assert "ok 1 - a\n" in text
+    assert "not ok 2 - b\n" in text
+    assert "ok 3 - c\n" in text
+    assert "# tests 3\n" in text
+    assert "# pass 2\n" in text
+    assert "# fail 1\n" in text
+    assert "message: boom" in text
 
 
 # --- TAP report ---------------------------------------------------------------

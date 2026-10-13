@@ -174,6 +174,12 @@ MUTANTS = [
         "        shared &= set(element.values())",
         "the intersection uses values instead of keys",
     ),
+    (
+        "m23-undecodable-success",
+        '        sys.stderr.write("%s: %s: the input is not valid UTF-8: %s\\n" % (PREFIX, path, error))\n        return 1',
+        '        sys.stderr.write("%s: %s: the input is not valid UTF-8: %s\\n" % (PREFIX, path, error))\n        return 0',
+        "an undecodable file is reported as success",
+    ),
 ]
 
 # The copy must be a working project, so only VCS metadata, previous reports and

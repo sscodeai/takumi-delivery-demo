@@ -17,9 +17,10 @@ The decisions the requirement leaves open are settled in the document:
     AMB-001  top-level: only the keys directly on each object count, so a key
              nested inside a sub-object is never reported and never flattened
              into a dotted path
-    AMB-002  stop-error: a file that is not valid JSON, or a value that is not
-             an array of objects, is a diagnostic on stderr and a non-zero
-             exit with no key list on stdout
+    AMB-002  stop-error: a file that is not valid JSON, a file that is not
+             UTF-8, or a value that is not an array of objects, is a
+             diagnostic on stderr and a non-zero exit with no key list on
+             stdout
     AMB-003  none: an array that holds no objects at all prints the single line
              `none` and exits zero
     AMB-004  codepoint: the keys are ordered by Unicode code point, so an
@@ -101,6 +102,11 @@ def main(argv):
             text = handle.read()
     except OSError as error:
         sys.stderr.write("%s: cannot read %s: %s\n" % (PREFIX, path, error))
+        return 1
+    except UnicodeDecodeError as error:
+        # A file that is not UTF-8 is malformed input (AMB-002 stop-error):
+        # report it, do not crash with a traceback.
+        sys.stderr.write("%s: %s: the input is not valid UTF-8: %s\n" % (PREFIX, path, error))
         return 1
 
     try:
