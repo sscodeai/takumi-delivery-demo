@@ -4,7 +4,7 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY (run 20261013T025127710Z). ci_config regenerated
+# REPAIRED FOR THIS DELIVERY (run 20261013T033438454Z). ci_config regenerated
 # the bare skeleton again and the regenerated file dropped everything the
 # delivered project's own suite pins, so its `tests` job would have run
 # `bash run-tests.sh` against a workflow those very tests reject. This file is
@@ -28,8 +28,8 @@
 # command by a shorter inner `timeout`, so a job that hangs fails on its own
 # budget instead of occupying a runner until the platform kills it.
 #
-# Verified for this delivery: `bash run-tests.sh` is green and the deliverable
-# prints the declared report for the declared world.
+# Verified for this delivery (run 20261013T033438454Z): `bash run-tests.sh` is
+# green and the deliverable prints the declared report for the declared world.
 name: ci
 on:
   push:
