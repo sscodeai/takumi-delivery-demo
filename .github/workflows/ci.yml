@@ -4,21 +4,21 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY (run 20261013T113608232Z, attempt 2). ci_config regenerated the bare
-# skeleton again; this file is that skeleton plus the repairs the confirmed requirement document and
-# the delivered project need, re-applied on this delivery:
-#   1. the pipeline-wide least-privilege grant (`permissions: contents: read`);
+# REPAIRED FOR THIS DELIVERY (run 20261013T131414211Z, attempt 1). ci_config emitted the bare
+# skeleton (with the literal `{map}` placeholder, which no shell can run). This file is that
+# skeleton plus the repairs the confirmed requirement document needs:
+#   1. a pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
 #   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`, TAP to reports/tests.tap);
 #   4. a `deliverable` job that runs exactly the declared command (`bash pathfind.sh <mapfile>`) on a
-#      reachable and an unreachable map and diffs the declared answers, so a wrong answer fails the
-#      pipeline instead of only the local suite; and
+#      reachable and an unreachable map and diffs the declared answers, and checks that a malformed
+#      map is rejected with a diagnostic on stderr and nothing on stdout (AMB-003); and
 #   5. a `mutation` job that runs the declared mutation command
 #      (`npx stryker run --reporters json`) and checks the declared survivors-json report
 #      (reports/mutation/mutation.json) measured at least one mutant and left no survivor.
 # Every job is additionally bounded by `timeout-minutes`, and every long-running command by a shorter
-# inner `timeout`, so a job that hangs fails on its own budget instead of occupying a runner until the
-# platform kills it.
+# inner `timeout`, so a job that hangs fails on its own budget instead of occupying a runner until
+# the platform kills it.
 name: ci
 on:
   push:

@@ -149,7 +149,13 @@ MUTANTS = [
     ),
 ]
 
-IGNORED = shutil.ignore_patterns(".git", "reports", "node_modules", "__pycache__", "*.pyc")
+# The copy must be a working project: the delivered suite asserts that the
+# declared mutation entry point (node_modules/.bin/stryker) exists, so excluding
+# node_modules would make every copy fail the suite for a reason that has
+# nothing to do with the mutant -- every mutant would look "killed" and the
+# gate would be vacuous. Only the VCS metadata, previous reports and bytecode
+# caches are left out.
+IGNORED = shutil.ignore_patterns(".git", "reports", "__pycache__", "*.pyc")
 
 
 def line_of(content, index):
@@ -157,7 +163,14 @@ def line_of(content, index):
 
 
 def run_suite(directory):
-    """Return True when the delivered suite passes in the mutated copy."""
+    """Return True when the delivered suite passes in the mutated copy.
+
+    The child is marked with ``PATHFIND_MUTATION_COPY`` so the delivered
+    suite's own mutation-integrity cases stand down instead of recursing into
+    another copy (see tests/pathfind_tests.py).
+    """
+    environment = dict(os.environ)
+    environment["PATHFIND_MUTATION_COPY"] = "1"
     try:
         result = subprocess.run(
             ["bash", "run-tests.sh"],
@@ -166,16 +179,39 @@ def run_suite(directory):
             stderr=subprocess.PIPE,
             timeout=SUITE_TIMEOUT_S,
             text=True,
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return False
     return result.returncode == 0
 
 
+def copy_project():
+    """Copy the project into a fresh throwaway directory and return its path."""
+    directory = tempfile.mkdtemp(prefix="pathfind-mutation-")
+    shutil.copytree(ROOT, directory, dirs_exist_ok=True, ignore=IGNORED)
+    return directory
+
+
 def run(report_path):
     original_source = open(os.path.join(ROOT, TARGET), encoding="utf-8").read()
     survivors = []
     total = 0
+
+    # Control run: the delivered suite must pass on an unmutated copy. If it
+    # does not, every mutant below would be reported as killed for a reason
+    # unrelated to the defect, so the gate would measure nothing. Fail closed.
+    control = copy_project()
+    try:
+        if not run_suite(control):
+            raise SystemExit(
+                "mutation harness: the delivered suite fails on an unmutated copy, "
+                "so every mutant would be reported as killed; the mutation report "
+                "would be vacuous"
+            )
+    finally:
+        shutil.rmtree(control, ignore_errors=True)
+    sys.stderr.write("control  the delivered suite passes on an unmutated copy\n")
 
     for mutant_id, find, replace, description in MUTANTS:
         total += 1
@@ -185,9 +221,8 @@ def run(report_path):
                 "mutation harness: mutant %s does not match %s; the harness would be vacuous"
                 % (mutant_id, TARGET)
             )
-        work_directory = tempfile.mkdtemp(prefix="pathfind-mutation-")
+        work_directory = copy_project()
         try:
-            shutil.copytree(ROOT, work_directory, dirs_exist_ok=True, ignore=IGNORED)
             target = os.path.join(work_directory, TARGET)
             mutated = original_source[:index] + replace + original_source[index + len(find):]
             with open(target, "w", encoding="utf-8") as handle:

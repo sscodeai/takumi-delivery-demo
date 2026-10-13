@@ -28,10 +28,12 @@ Coverage is explicit for every acceptance criterion and every open decision in
 """
 
 import contextlib
+import importlib.util
 import io
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -454,6 +456,75 @@ def req_005_the_declared_mutation_entry_point_exists():
     assert os.path.exists(os.path.join(ROOT, "mutation", "pathfind_mutation.py")), (
         "the mutation harness must exist"
     )
+
+
+def load_mutation_harness():
+    """Import mutation/pathfind_mutation.py so its copy policy can be checked."""
+    path = os.path.join(ROOT, "mutation", "pathfind_mutation.py")
+    spec = importlib.util.spec_from_file_location("pathfind_mutation_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@case
+def req_005_the_mutation_copy_keeps_the_delivered_suite_runnable():
+    """The mutant copy must not fail the suite for an unrelated reason.
+
+    The delivered suite asserts that the declared mutation entry point exists,
+    so a mutation copy that dropped ``node_modules`` would fail every mutant
+    before the defect could be observed: every mutant would look killed and the
+    gate would be vacuous. This pins the copy policy the harness uses.
+    """
+    harness = load_mutation_harness()
+    with tempfile.TemporaryDirectory() as directory:
+        copy = os.path.join(directory, "copy")
+        shutil.copytree(ROOT, copy, dirs_exist_ok=True, ignore=harness.IGNORED)
+        for relative in (
+            "pathfind.sh",
+            "pathfind.py",
+            "run-tests.sh",
+            os.path.join("tests", "pathfind_tests.py"),
+            os.path.join("node_modules", ".bin", "stryker"),
+            os.path.join("mutation", "pathfind_mutation.py"),
+        ):
+            assert os.path.exists(os.path.join(copy, relative)), (
+                "the mutation copy must keep %s" % relative
+            )
+
+
+@case
+def req_005_the_mutation_gate_is_not_vacuous():
+    """A pristine copy passes and a real mutant is actually killed.
+
+    The control half catches a harness whose copies fail the suite for an
+    unrelated reason (which would report every mutant as killed); the mutant
+    half catches a suite that can no longer detect a defect at all. The harness
+    marks its own child runs with PATHFIND_MUTATION_COPY so this case stands
+    down inside them instead of recursing.
+    """
+    if os.environ.get("PATHFIND_MUTATION_COPY") == "1":
+        return
+    harness = load_mutation_harness()
+    with tempfile.TemporaryDirectory() as directory:
+        control = os.path.join(directory, "control")
+        shutil.copytree(ROOT, control, dirs_exist_ok=True, ignore=harness.IGNORED)
+        assert harness.run_suite(control), (
+            "the delivered suite must pass on an unmutated copy"
+        )
+
+        mutant_id, find, replace, _description = harness.MUTANTS[0]
+        mutant = os.path.join(directory, "mutant")
+        shutil.copytree(ROOT, mutant, dirs_exist_ok=True, ignore=harness.IGNORED)
+        target = os.path.join(mutant, harness.TARGET)
+        with open(target, encoding="utf-8") as handle:
+            source = handle.read()
+        assert find in source, "mutant %s no longer matches the source" % mutant_id
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(source.replace(find, replace, 1))
+        assert not harness.run_suite(mutant), (
+            "mutant %s must be killed by the delivered suite" % mutant_id
+        )
 
 
 # --- AMB-001: orthogonal adjacency --------------------------------------------
