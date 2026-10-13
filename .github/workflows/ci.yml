@@ -6,9 +6,9 @@
 #
 # REPAIRED FOR THIS DELIVERY. The regenerated skeleton dropped everything the
 # delivered project's own suite pins, so its `tests` job would have run
-# `bash run-tests.sh` against a workflow those very tests reject. This file is
-# the skeleton plus the four repairs the suite requires, so the pipeline and the
-# project can no longer drift apart silently:
+# `bash run-tests.sh` against a workflow those very tests reject. This file
+# keeps the skeleton and layers the four repairs the suite requires back on top,
+# so the pipeline and the project can no longer drift apart silently:
 #   1. the pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
 #   3. the exact declared world under `deliverable.input_format.sample` plus the
@@ -49,7 +49,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: write the declared world the requirement document names
+      - name: write the sample input the requirement document declares
         run: |
           # The exact data rows under deliverable.input_format.sample, in the
           # document's order, so the pipeline's world cannot drift from it.
