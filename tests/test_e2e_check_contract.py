@@ -102,6 +102,24 @@ class E2ECheckContractTests(unittest.TestCase):
         self.assertTrue(statuses)
         self.assertTrue(all(status == "passed" for status in statuses), statuses)
 
+    def test_the_report_names_the_criteria_the_check_claims_to_cover(self):
+        # The declared check is the acceptance scenario, so the CTRF report it
+        # writes must keep naming each criterion it purports to check. A later
+        # weakening of e2e/check.sh that silently drops one of them is caught
+        # here rather than only by the external judge.
+        result = run_check(self.csv)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        names = [test["name"] for test in read_report()["results"]["tests"]]
+        joined = " ".join(names)
+        for criterion in ("REQ-001", "REQ-002", "REQ-003", "REQ-004", "REQ-006", "REL-002"):
+            with self.subTest(criterion=criterion):
+                self.assertIn(criterion, joined)
+        # REQ-005 is checked by the whole-report recomputation check, which does
+        # not spell its id out on its own.
+        self.assertTrue(
+            any("independent recomputation" in name for name in names), names
+        )
+
     def test_a_header_less_world_is_checked_too(self):
         path = write_csv(HEADERLESS)
         self.addCleanup(os.unlink, path)
