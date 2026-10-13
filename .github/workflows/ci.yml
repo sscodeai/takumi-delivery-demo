@@ -15,6 +15,12 @@
 #      exact-report `diff` against it, so a wrong count, min, max, mean, SKIPPED
 #      or TOTAL line fails the pipeline instead of only the local suite;
 #   4. the declared mutation gate (`bash mutation.sh`, zero survivors).
+#
+# Re-checked for this delivery: the requirement run names `bash mutation/run.sh`
+# as its mutation entry point. That alias runs the same harness and writes the
+# same survivors-json report (`reports/mutation/mutation.json` and the
+# `reports/mutation/survivors.json` mirror), so the gate below still measures
+# the delivered suite against every mutant.
 # Every job is additionally bounded by `timeout-minutes`, and every long-running
 # command by a shorter inner `timeout`, so a job that hangs fails on its own
 # budget instead of occupying a runner until the platform kills it.
