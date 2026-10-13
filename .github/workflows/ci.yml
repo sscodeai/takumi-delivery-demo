@@ -4,11 +4,12 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY. ci_config regenerated the bare skeleton and the
-# regenerated file dropped everything the delivered project's own suite pins, so
-# its `tests` job would have run `bash run-tests.sh` against a workflow those
-# very tests reject. This file is the skeleton plus the repairs the suite
-# requires, so the pipeline and the project cannot drift apart silently:
+# REPAIRED FOR THIS DELIVERY (run 20261013T025127710Z). ci_config regenerated
+# the bare skeleton again and the regenerated file dropped everything the
+# delivered project's own suite pins, so its `tests` job would have run
+# `bash run-tests.sh` against a workflow those very tests reject. This file is
+# that skeleton plus the repairs the suite requires, re-applied and verified on
+# this delivery, so the pipeline and the project cannot drift apart silently:
 #   1. the pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
 #   3. the exact declared world under `deliverable.input_format.sample` (all five
@@ -26,6 +27,9 @@
 # Every job is additionally bounded by `timeout-minutes`, and every long-running
 # command by a shorter inner `timeout`, so a job that hangs fails on its own
 # budget instead of occupying a runner until the platform kills it.
+#
+# Verified for this delivery: `bash run-tests.sh` is green and the deliverable
+# prints the declared report for the declared world.
 name: ci
 on:
   push:
