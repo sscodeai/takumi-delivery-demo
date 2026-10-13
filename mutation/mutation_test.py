@@ -52,9 +52,10 @@ REPORT = DECLARED_REPORT
 
 # Test modules that drive summary.sh through its process boundary. The two
 # service modules exercise the separate HTTP artifact (station_summary.py),
-# which none of these mutations touch, and the two mutation modules only
+# which none of these mutations touch, and the three mutation modules only
 # inspect or drive THIS harness (test_mutation_entry_point_contract runs
-# `bash mutation.sh` itself), so none of them can kill a summary.sh mutant;
+# `bash mutation.sh` itself; test_mutation_run_integration runs
+# `bash mutation/run.sh`), so none of them can kill a summary.sh mutant;
 # running them would only spend the mutation budget or recurse. Everything else
 # is discovered.
 EXCLUDED_MODULES = frozenset(
@@ -63,6 +64,7 @@ EXCLUDED_MODULES = frozenset(
         "test_service_units",
         "test_mutation_harness",
         "test_mutation_entry_point_contract",
+        "test_mutation_run_integration",
     }
 )
 
