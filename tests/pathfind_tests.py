@@ -30,6 +30,8 @@ Coverage is explicit for every acceptance criterion and every open decision in
 import contextlib
 import io
 import os
+import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -103,6 +105,72 @@ def expect_malformed(content, why):
     assert result.stdout == "", "%s: expected an empty stdout, got %r" % (why, result.stdout)
 
 
+def reference_distance(rows, start, end):
+    """An independent BFS oracle for the shortest orthogonal move count.
+
+    This is deliberately written against the same contract but with a different
+    shape than the implementation (a distance table and a plain list used as a
+    queue, versus the implementation's ``deque`` and early return), so a shared
+    mistake is less likely to cancel out. It only ever visits the four
+    edge-adjacent neighbours, each one move (AMB-001), and it counts moves and
+    not cells (AMB-002); it returns ``None`` when no route exists.
+    """
+    if start == end:
+        return 0
+    height = len(rows)
+    width = len(rows[0])
+    distances = {start: 0}
+    frontier = [start]
+    while frontier:
+        node = frontier.pop(0)
+        row, column = node
+        for next_row, next_column in (
+            (row - 1, column),
+            (row + 1, column),
+            (row, column - 1),
+            (row, column + 1),
+        ):
+            if not (0 <= next_row < height and 0 <= next_column < width):
+                continue
+            neighbour = (next_row, next_column)
+            if neighbour in distances:
+                continue
+            if rows[next_row][next_column] == "#":
+                continue
+            distances[neighbour] = distances[node] + 1
+            if neighbour == end:
+                return distances[neighbour]
+            frontier.append(neighbour)
+    return None
+
+
+def random_grid(rng, max_height=6, max_width=6):
+    """A seeded random ``#``/``.`` grid plus a start and an end cell.
+
+    The two chosen cells are always forced passable, so the oracle and the
+    implementation see the same walkable grid. Occasionally the same cell is
+    returned, which lets the differential cover the zero-move edge that the
+    on-disk S/E format cannot express. The endpoints are chosen before the walls
+    so the function always terminates, even on a 1x1 grid.
+    """
+    height = rng.randint(1, max_height)
+    width = rng.randint(1, max_width)
+    cells = [(row, column) for row in range(height) for column in range(width)]
+    if len(cells) < 2 or rng.random() < 0.1:
+        start = end = rng.choice(cells)
+    else:
+        start, end = rng.sample(cells, 2)
+    rows = [
+        "".join("#" if rng.random() < 0.35 else "." for _ in range(width))
+        for _ in range(height)
+    ]
+    for row, column in {start, end}:
+        line = list(rows[row])
+        line[column] = "."
+        rows[row] = "".join(line)
+    return rows, start, end
+
+
 # --- REQ-001: the entry point and its first argument ---------------------------
 
 
@@ -136,6 +204,28 @@ def req_001_an_unreadable_path_is_a_non_zero_error_with_a_diagnostic():
     assert result.returncode != 0, "an unreadable path must exit non-zero"
     assert result.stderr.strip() != "", "an unreadable path must write a diagnostic on stderr"
     assert result.stdout == "", "an unreadable path must write nothing on stdout"
+
+
+@case
+def req_001_stdout_is_exactly_one_bare_answer_token():
+    """The success line is a bare integer or the word 'unreachable', nothing else."""
+    allowed = re.compile(r"\A(0|[1-9][0-9]*|unreachable)\n\Z")
+    maps = [
+        "SE\n",
+        "S.E\n",
+        "S#E\n",
+        "S....\n.....\n.....\n.....\n....E\n",
+        "S.#\n..#\n#.E\n",
+    ]
+    for text in maps:
+        with tempfile.TemporaryDirectory() as directory:
+            result = run([write_map(directory, text)])
+        assert result.returncode == 0, "%r must be accepted (%s)" % (text, result.stderr)
+        assert allowed.match(result.stdout), (
+            "the answer must be one bare integer or the lowercase word 'unreachable': %r"
+            % result.stdout
+        )
+        assert result.stdout.count("\n") == 1, "the answer must be exactly one line"
 
 
 # --- REQ-002: the grid alphabet, rectangle and single S/E ----------------------
@@ -236,6 +326,70 @@ def req_003_a_walled_off_exit_still_exits_zero():
     assert result.stdout == "unreachable\n", "unreachable must be the whole line"
 
 
+# --- REQ-003: differential coverage against an independent oracle -------------
+
+
+@case
+def req_003_random_grids_match_an_independent_reference():
+    """Unit differential: parse-free grids through the in-process search."""
+    rng = random.Random(20261013)
+    for _ in range(400):
+        rows, start, end = random_grid(rng)
+        expected = reference_distance(rows, start, end)
+        got = pathfind.shortest(rows, start, end)
+        assert got == expected, (
+            "grid %r start %r end %r: implementation %r, reference %r"
+            % (rows, start, end, got, expected)
+        )
+
+
+@case
+def req_003_random_maps_match_the_reference_through_the_cli():
+    """Integration differential: the delivered entry point against the oracle."""
+    rng = random.Random(424242)
+    checked = 0
+    attempts = 0
+    while checked < 25 and attempts < 400:
+        attempts += 1
+        rows, start, end = random_grid(rng)
+        if start == end:
+            continue
+        grid = [list(row) for row in rows]
+        grid[start[0]][start[1]] = "S"
+        grid[end[0]][end[1]] = "E"
+        text = "\n".join("".join(row) for row in grid) + "\n"
+        expected = reference_distance(rows, start, end)
+        wanted = "unreachable" if expected is None else str(expected)
+        got = answer(text)
+        assert got == wanted, "map %r: CLI %r, reference %r" % (text, got, wanted)
+        checked += 1
+    assert checked == 25, "the differential produced only %d maps" % checked
+
+
+@case
+def req_003_the_reference_agrees_the_zero_move_edge_is_zero():
+    assert reference_distance(["."], (0, 0), (0, 0)) == 0
+    assert pathfind.shortest(["."], (0, 0), (0, 0)) == 0
+
+
+@case
+def req_003_the_renderer_prints_a_zero_length_path_as_plain_zero():
+    """A zero-move answer is still a bare decimal integer, not 'unreachable'.
+
+    The on-disk format cannot spell a start that is also the exit, so the parse
+    boundary is substituted to drive ``main()``'s renderer over the zero case.
+    """
+    import unittest.mock as mock
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_map(directory, "S\n")
+        with mock.patch.object(pathfind, "parse", return_value=(["S"], (0, 0), (0, 0))):
+            code, out, err = captured_main([path])
+    assert code == 0, err
+    assert out == "0\n", "the zero answer must be the bare digit 0, got %r" % out
+    assert err == "", err
+
+
 # --- REQ-004: the delivered TAP report ----------------------------------------
 
 
@@ -256,6 +410,34 @@ def req_004_the_suite_asserts_a_reachable_and_an_unreachable_case():
     names = " ".join(function.__name__ for function in CASES).lower()
     assert "reachable" in names or "detour" in names, "the suite must assert a reachable map"
     assert "unreachable" in names, "the suite must assert the unreachable case"
+
+
+# --- REQ-004: the TAP renderer that produces reports/tests.tap ----------------
+
+
+@case
+def req_004_the_tap_renderer_marks_pass_and_fail_with_totals():
+    report = tap_report(
+        [
+            ("a_passing_case", True, ""),
+            ("a_failing_case", False, "boom"),
+        ]
+    )
+    assert report.startswith("TAP version 13\n"), report
+    assert "ok 1 - a_passing_case" in report, report
+    assert "not ok 2 - a_failing_case" in report, report
+    assert "# tests 2" in report, report
+    assert "# pass 1" in report, report
+    assert "# fail 1" in report, report
+
+
+@case
+def req_004_the_tap_renderer_has_no_failing_line_for_a_green_run():
+    report = tap_report([("green", True, "")])
+    assert "not ok" not in report, report
+    assert "# tests 1" in report, report
+    assert "# pass 1" in report, report
+    assert "# fail 0" in report, report
 
 
 # --- REQ-005: the mutation tool the document declares -------------------------
