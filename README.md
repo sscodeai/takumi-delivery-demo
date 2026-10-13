@@ -105,10 +105,15 @@ and the report as the tool-agnostic `survivors-json` shape at
 Because the declared report shape is not a mutator-specific one, the project
 ships its own `stryker` executable: `node_modules/.bin/stryker` (declared in
 `package.json`'s `bin` field) launches `mutation/stryker-cli.mjs`, which runs
-`mutation/pathfind_mutation.py`. The harness copies the project into a throwaway
-directory, applies one deliberate defect to `pathfind.py` at a time, and runs the
-delivered suite against the mutant. A mutant the suite still passes is a
-survivor. The command exits non-zero when any mutant survives and always writes
+`mutation/pathfind_mutation.py`. The harness first runs a control: the delivered
+suite must pass on an unmutated copy, or the run stops with a non-zero exit and
+no report, because a suite that fails for an unrelated reason would "kill"
+every mutant and the gate would measure nothing. It then copies the project into
+a throwaway directory, applies one deliberate defect to `pathfind.py` at a time,
+and runs the delivered suite against the mutant. A mutant the suite still passes
+is a survivor. The copy keeps `node_modules/.bin/stryker`, which the delivered
+suite asserts exists, so a copy can only fail because of the mutant. The command
+exits non-zero when any mutant survives and always writes
 the declared report.
 
 ```console

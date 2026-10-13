@@ -28,10 +28,14 @@ Coverage is explicit for every acceptance criterion and every open decision in
 """
 
 import contextlib
+import heapq
+import importlib.util
 import io
+import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -456,6 +460,75 @@ def req_005_the_declared_mutation_entry_point_exists():
     )
 
 
+def load_mutation_harness():
+    """Import mutation/pathfind_mutation.py so its copy policy can be checked."""
+    path = os.path.join(ROOT, "mutation", "pathfind_mutation.py")
+    spec = importlib.util.spec_from_file_location("pathfind_mutation_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@case
+def req_005_the_mutation_copy_keeps_the_delivered_suite_runnable():
+    """The mutant copy must not fail the suite for an unrelated reason.
+
+    The delivered suite asserts that the declared mutation entry point exists,
+    so a mutation copy that dropped ``node_modules`` would fail every mutant
+    before the defect could be observed: every mutant would look killed and the
+    gate would be vacuous. This pins the copy policy the harness uses.
+    """
+    harness = load_mutation_harness()
+    with tempfile.TemporaryDirectory() as directory:
+        copy = os.path.join(directory, "copy")
+        shutil.copytree(ROOT, copy, dirs_exist_ok=True, ignore=harness.IGNORED)
+        for relative in (
+            "pathfind.sh",
+            "pathfind.py",
+            "run-tests.sh",
+            os.path.join("tests", "pathfind_tests.py"),
+            os.path.join("node_modules", ".bin", "stryker"),
+            os.path.join("mutation", "pathfind_mutation.py"),
+        ):
+            assert os.path.exists(os.path.join(copy, relative)), (
+                "the mutation copy must keep %s" % relative
+            )
+
+
+@case
+def req_005_the_mutation_gate_is_not_vacuous():
+    """A pristine copy passes and a real mutant is actually killed.
+
+    The control half catches a harness whose copies fail the suite for an
+    unrelated reason (which would report every mutant as killed); the mutant
+    half catches a suite that can no longer detect a defect at all. The harness
+    marks its own child runs with PATHFIND_MUTATION_COPY so this case stands
+    down inside them instead of recursing.
+    """
+    if os.environ.get("PATHFIND_MUTATION_COPY") == "1":
+        return
+    harness = load_mutation_harness()
+    with tempfile.TemporaryDirectory() as directory:
+        control = os.path.join(directory, "control")
+        shutil.copytree(ROOT, control, dirs_exist_ok=True, ignore=harness.IGNORED)
+        assert harness.run_suite(control), (
+            "the delivered suite must pass on an unmutated copy"
+        )
+
+        mutant_id, find, replace, _description = harness.MUTANTS[0]
+        mutant = os.path.join(directory, "mutant")
+        shutil.copytree(ROOT, mutant, dirs_exist_ok=True, ignore=harness.IGNORED)
+        target = os.path.join(mutant, harness.TARGET)
+        with open(target, encoding="utf-8") as handle:
+            source = handle.read()
+        assert find in source, "mutant %s no longer matches the source" % mutant_id
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(source.replace(find, replace, 1))
+        assert not harness.run_suite(mutant), (
+            "mutant %s must be killed by the delivered suite" % mutant_id
+        )
+
+
 # --- AMB-001: orthogonal adjacency --------------------------------------------
 
 
@@ -521,6 +594,231 @@ def amb_003_unit_parse_rejects_every_malformed_shape():
     parse_error("S.\nEE\n", "two E")
     parse_error("", "an empty map")
     parse_error("\n\n", "a blank-only map")
+
+
+# --- Independent verification added by the unit-and-integration test step -----
+#
+# Every case below is a SECOND, independent check of one acceptance criterion
+# and of the option chosen for each AMB-nnn entry. The oracle is deliberately
+# not the one the implementation uses: Dijkstra over a heap-ordered frontier and
+# a distance table, where the implementation is a breadth-first deque with an
+# early return. No code is shared with pathfind.py.
+
+
+def dijkstra_distance(rows, start, end):
+    """Shortest orthogonal move count via Dijkstra over unit-cost edges.
+
+    Returns ``None`` when no route exists and 0 when start is end. Only the four
+    edge-adjacent neighbours are generated (AMB-001) and every edge costs one
+    move (AMB-002), so this is an independent statement of the same contract.
+    """
+    if start == end:
+        return 0
+    height = len(rows)
+    width = len(rows[0])
+    distances = {start: 0}
+    frontier = [(0, start)]
+    while frontier:
+        distance, node = heapq.heappop(frontier)
+        if distance != distances.get(node):
+            continue
+        if node == end:
+            return distance
+        row, column = node
+        for next_row, next_column in (
+            (row - 1, column),
+            (row + 1, column),
+            (row, column - 1),
+            (row, column + 1),
+        ):
+            if not (0 <= next_row < height and 0 <= next_column < width):
+                continue
+            if rows[next_row][next_column] == "#":
+                continue
+            candidate = distance + 1
+            if candidate < distances.get((next_row, next_column), candidate + 1):
+                distances[(next_row, next_column)] = candidate
+                heapq.heappush(frontier, (candidate, (next_row, next_column)))
+    return None
+
+
+def oracle_answer(rows, start, end):
+    distance = dijkstra_distance(rows, start, end)
+    return "unreachable" if distance is None else str(distance)
+
+
+def render_fixture(rows, start, end):
+    """Turn an oracle grid into an on-disk map with exactly one S and one E."""
+    grid = [list(row) for row in rows]
+    grid[start[0]][start[1]] = "S"
+    grid[end[0]][end[1]] = "E"
+    return "\n".join("".join(row) for row in grid) + "\n"
+
+
+@case
+def extra_req_002_the_start_and_exit_cells_are_walkable():
+    """S must be leaveable and E enterable: both are ordinary free cells."""
+    expect_answer("SE\n", "1", "E to the right is a walkable target")
+    expect_answer("S\nE\n", "1", "S reaches E below")
+    expect_answer("E\nS\n", "1", "S reaches E above")
+    expect_answer("ES\n", "1", "S reaches E to the left")
+
+
+@case
+def extra_req_002_internal_whitespace_is_a_stop_error():
+    expect_malformed("S E\n", "an embedded space is not a map character")
+    expect_malformed("S\tE\n", "an embedded tab is not a map character")
+
+
+@case
+def extra_req_002_blank_only_and_empty_maps_are_stop_errors():
+    expect_malformed("", "an empty file has no grid")
+    expect_malformed("\n\n\n", "a blank-only file has no grid")
+
+
+@case
+def extra_req_002_invalid_utf8_bytes_are_rejected():
+    """The reader decodes with errors=replace, so a stray byte becomes U+FFFD.
+
+    U+FFFD is not one of # . S E, so the map is rejected rather than misread.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        result = run([write_map(directory, b"S\xffE\n")])
+    assert result.returncode != 0, "a byte outside the alphabet must be rejected"
+    assert result.stderr.strip() != "", "the rejection must carry a diagnostic"
+    assert result.stdout == "", "the rejection must print nothing on stdout"
+
+
+@case
+def extra_req_003_a_large_open_grid_prints_the_manhattan_distance():
+    size = 20
+    grid = [["." for _ in range(size)] for _ in range(size)]
+    grid[0][0] = "S"
+    grid[size - 1][size - 1] = "E"
+    text = "\n".join("".join(row) for row in grid) + "\n"
+    expect_answer(text, str(2 * (size - 1)), "an open 20x20 grid is 38 moves")
+
+
+@case
+def extra_req_003_an_exit_sealed_by_walls_is_unreachable():
+    text = "S....\n.###.\n.#E#.\n.###.\n.....\n"
+    expect_answer(text, "unreachable", "an exit sealed by walls has no route")
+
+
+@case
+def extra_req_003_dijkstra_oracle_agrees_on_detour_mazes():
+    fixtures = [
+        (["S.#", "..#", "#.E"], "4"),
+        (["S....", "###.#", "#...#", "#.###", "#..E."], "11"),
+    ]
+    for rows, wanted in fixtures:
+        rendered = "\n".join(rows) + "\n"
+        got = answer(rendered)
+        assert got == wanted, "map %r: expected %s, got %s" % (rendered, wanted, got)
+        start = next(
+            (r, c) for r, line in enumerate(rows) for c, cell in enumerate(line) if cell == "S"
+        )
+        end = next(
+            (r, c) for r, line in enumerate(rows) for c, cell in enumerate(line) if cell == "E"
+        )
+        assert dijkstra_distance(rows, start, end) == int(wanted), (
+            "the Dijkstra oracle disagrees on %r" % rendered
+        )
+
+
+@case
+def extra_req_003_random_maps_match_dijkstra_through_the_entry_point():
+    rng = random.Random(90210)
+    checked = 0
+    attempts = 0
+    while checked < 30 and attempts < 600:
+        attempts += 1
+        rows, start, end = random_grid(rng, max_height=7, max_width=7)
+        if start == end:
+            continue
+        rendered = render_fixture(rows, start, end)
+        got = answer(rendered)
+        wanted = oracle_answer(rows, start, end)
+        assert got == wanted, "map %r: CLI %s, Dijkstra %s" % (rendered, got, wanted)
+        checked += 1
+    assert checked == 30, "the differential produced only %d maps" % checked
+
+
+@case
+def extra_req_003_the_two_independent_oracles_agree():
+    rng = random.Random(112233)
+    for _ in range(300):
+        rows, start, end = random_grid(rng)
+        assert dijkstra_distance(rows, start, end) == reference_distance(rows, start, end), (
+            "the two independent oracles disagree on %r %r %r" % (rows, start, end)
+        )
+
+
+@case
+def extra_amb_001_an_open_grid_never_takes_a_diagonal_shortcut():
+    # A 4x4 open grid: orthogonal is 3+3=6 moves; a diagonal mover would take 3.
+    expect_answer("S...\n....\n....\n...E\n", "6", "a diagonal shortcut is not a move")
+
+
+@case
+def extra_amb_002_every_adjacent_direction_costs_exactly_one_move():
+    expect_answer("SE\n", "1", "E to the right is one move")
+    expect_answer("ES\n", "1", "E to the left is one move")
+    expect_answer("S\nE\n", "1", "E below is one move")
+    expect_answer("E\nS\n", "1", "E above is one move")
+
+
+@case
+def extra_req_004_the_runner_propagates_a_failing_suite():
+    """run-tests.sh must exit non-zero when the suite it runs fails."""
+    with tempfile.TemporaryDirectory() as directory:
+        failing = os.path.join(directory, "failing_suite.py")
+        with open(failing, "w", encoding="utf-8") as handle:
+            handle.write("import sys\nprint('not ok 1 - deliberately failing')\nsys.exit(1)\n")
+        environment = dict(os.environ)
+        environment["PATHFIND_TEST_FILE"] = failing
+        result = subprocess.run(
+            ["bash", os.path.join(ROOT, "run-tests.sh")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=30,
+        )
+    assert result.returncode != 0, "run-tests.sh must exit non-zero when a case fails"
+
+
+@case
+def extra_req_005_the_declared_mutation_command_reports_zero_survivors():
+    """Run exactly the declared command and read the declared report shape.
+
+    The outer mutation harness runs this very suite against each mutant with
+    ``PATHFIND_MUTATION_COPY=1``; stand down there so the command does not
+    recurse into a second mutation run.
+    """
+    if os.environ.get("PATHFIND_MUTATION_COPY") == "1":
+        return
+    report_path = os.path.join(ROOT, "reports", "mutation", "mutation.json")
+    result = subprocess.run(
+        ["npx", "stryker", "run", "--reporters", "json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert result.returncode == 0, (
+        "the declared mutation command must exit 0 with no survivor: %s" % result.stderr[-2000:]
+    )
+    assert os.path.exists(report_path), "the declared report path %s must exist" % report_path
+    with open(report_path, encoding="utf-8") as handle:
+        report = json.load(handle)
+    assert isinstance(report, dict), report
+    assert "total" in report and "survivors" in report, report
+    assert isinstance(report["total"], int) and report["total"] > 0, report
+    assert isinstance(report["survivors"], list), report
+    assert report["survivors"] == [], (
+        "every mutant must be killed, got %r" % (report["survivors"],)
+    )
 
 
 # --- REQ-001: bounded, non-interactive invocation -----------------------------
