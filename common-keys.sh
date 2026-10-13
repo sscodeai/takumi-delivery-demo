@@ -4,11 +4,13 @@
 # Usage: bash common-keys.sh <json-file>
 #
 # Contract (docs/requirements/intake.yaml):
-#   run:    "bash common-keys.sh {json}"
+#   run:    "bash common-keys.sh <json-file>"
 #   stdout: one common key per line, in ascending alphabetical order, or the
 #           single lowercase word `none` when no key is common; exit 0.
-#   a file that is not a JSON array of objects is a stop-error (AMB-002): a
-#   diagnostic on stderr and a non-zero exit, with no key list on stdout.
+#   a file that is not a JSON array is a stop-error (AMB-003): a diagnostic on
+#   stderr and a non-zero exit, with no key list on stdout.
+#   an array element that is not an object is skipped (AMB-002); an array with
+#   no object at all prints `none` and exits 0 (AMB-001).
 #
 # The logic lives in common_keys.py (Python 3 standard library only), so the
 # command needs no install step and no network access; this wrapper is the

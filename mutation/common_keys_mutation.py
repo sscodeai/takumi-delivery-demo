@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Mutation harness behind the declared `npx stryker run --reporters json`.
+"""Mutation harness behind the declared `bash mutation.sh`.
 
 The confirmed requirement document declares (docs/requirements/intake.yaml):
 
     mutation:
-      run:           npx stryker run --reporters json
+      run:           bash mutation.sh
       report_path:   reports/mutation/mutation.json
       format:        survivors-json
       max_survivors: 0
@@ -69,7 +69,7 @@ MUTANTS = [
     (
         "m05-empty-array-error",
         "    if not objects:\n        return []",
-        "    if not objects:\n        raise InputError(\"the array holds no objects\")",
+        '    if not objects:\n        raise InputError("the array holds no objects")',
         "an array with no objects is rejected instead of printing none",
     ),
     (
@@ -79,16 +79,16 @@ MUTANTS = [
         "a top-level value that is not an array is not rejected",
     ),
     (
-        "m07-non-object-accepted",
-        "        if not isinstance(element, dict):",
-        "        if False:",
-        "an array element that is not an object is not rejected",
+        "m07-non-object-not-skipped",
+        "    objects = [element for element in elements if isinstance(element, dict)]",
+        "    objects = [element for element in elements]",
+        "a non-object element is not skipped, so a keyed object crashes the command",
     ),
     (
-        "m08-object-element-rejected",
-        "        if not isinstance(element, dict):",
-        "        if isinstance(element, dict):",
-        "an object element is rejected as if it were not one",
+        "m08-skip-inverted",
+        "if isinstance(element, dict)]",
+        "if not isinstance(element, dict)]",
+        "the skip keeps the non-objects and drops the objects",
     ),
     (
         "m09-none-uppercase",
@@ -180,6 +180,24 @@ MUTANTS = [
         '        sys.stderr.write("%s: %s: the input is not valid UTF-8: %s\\n" % (PREFIX, path, error))\n        return 0',
         "an undecodable file is reported as success",
     ),
+    (
+        "m24-start-from-second",
+        "    shared = set(objects[0].keys())",
+        "    shared = set(objects[1].keys())",
+        "the intersection starts from the second object, so the first is ignored",
+    ),
+    (
+        "m25-empty-result",
+        "    return sorted(shared)",
+        "    return []",
+        "the intersection is thrown away and nothing is ever reported",
+    ),
+    (
+        "m26-reversed-string-order",
+        "    return sorted(shared)",
+        "    return sorted(shared, key=lambda key: key[::-1])",
+        "the common keys are ordered by their reversed spelling",
+    ),
 ]
 
 # The copy must be a working project, so only VCS metadata, previous reports and
@@ -192,7 +210,12 @@ def line_of(content, index):
 
 
 def run_suite(directory):
-    """Return True when the delivered suite passes in the copied project."""
+    """Return True when the delivered suite passes in the copied project.
+
+    The child suite is marked with COMMON_KEYS_IN_MUTATION so its own bounded
+    harness case (tests/common_keys_tests.py) does not invoke this harness
+    again; without the mark the suite would recurse through run-tests.sh.
+    """
     try:
         result = subprocess.run(
             ["bash", "run-tests.sh"],
@@ -201,6 +224,7 @@ def run_suite(directory):
             stderr=subprocess.PIPE,
             timeout=SUITE_TIMEOUT_S,
             text=True,
+            env=dict(os.environ, COMMON_KEYS_IN_MUTATION="1"),
         )
     except subprocess.TimeoutExpired:
         return False

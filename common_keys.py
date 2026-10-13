@@ -5,26 +5,23 @@ The behaviour is exactly the one the confirmed requirement document declares
 (docs/requirements/intake.yaml):
 
     REQ-001  the command-line entry point is common-keys.sh, one file argument
-    REQ-002  the input is one JSON value: an array whose elements are objects
-    REQ-003  a key is reported only when it is present in EVERY object
-    REQ-004  one common key per line, sorted in ascending alphabetical order
-    REQ-005  when no key is common, the single line `none`
-    REQ-006  the delivered tests pin this behaviour and write reports/tests.tap
-    REQ-007  the choices recorded for AMB-001 .. AMB-004 are applied here
+    REQ-002  the input is one JSON value: an array; its key names are the
+             object elements' own top-level keys
+    REQ-003  one common key per line, ascending Unicode code point order
+    REQ-004  when no key is common, the single line `none`
+    REQ-005  the delivered tests pin this behaviour and write reports/tests.tap
+    REQ-006  the delivered `bash mutation.sh` writes the survivors-json report
+    REQ-007  the choices recorded for AMB-001 .. AMB-003 are applied here
 
 The decisions the requirement leaves open are settled in the document:
 
-    AMB-001  top-level: only the keys directly on each object count, so a key
-             nested inside a sub-object is never reported and never flattened
-             into a dotted path
-    AMB-002  stop-error: a file that is not valid JSON, a file that is not
-             UTF-8, or a value that is not an array of objects, is a
-             diagnostic on stderr and a non-zero exit with no key list on
-             stdout
-    AMB-003  none: an array that holds no objects at all prints the single line
-             `none` and exits zero
-    AMB-004  codepoint: the keys are ordered by Unicode code point, so an
-             uppercase letter precedes its lowercase counterpart
+    AMB-001  none: the top-level array may be empty; no key is common to zero
+             objects, so the answer is the single line `none` and exit 0
+    AMB-002  skip: an array element that is not a JSON object is ignored, and
+             the intersection is taken over the object elements that remain
+    AMB-003  error: a missing or unreadable file, a file that is not valid
+             JSON, or a top-level value that is not an array is a diagnostic on
+             stderr and a non-zero exit with no result lines on stdout
 
 Nothing here reads a second file, needs stdin, touches the network, or depends
 on anything outside the Python 3 standard library.
@@ -41,16 +38,17 @@ PREFIX = "common-keys.sh"
 
 
 class InputError(Exception):
-    """The file is not the declared JSON array of objects (AMB-002 stop-error)."""
+    """The input is not a usable JSON array (AMB-003 error)."""
 
 
 def parse(text):
-    """Return the array of objects ``text`` holds, else raise InputError.
+    """Return the top-level array ``text`` holds, else raise InputError.
 
-    The whole file is one JSON value (REQ-002). It must be an array, and every
-    element of that array must be an object; anything else is the stop-error
-    AMB-002 records. An empty array is valid here and yields ``[]``: it holds
-    no objects, which AMB-003 renders as ``none``.
+    The whole file is one JSON value and that value must be an array (REQ-002).
+    A file that does not parse, and a top-level value that is not an array, are
+    the AMB-003 error. The ELEMENTS are deliberately not validated here: an
+    element that is not an object is not an error under AMB-002, it is skipped
+    by common_keys().
     """
     try:
         value = json.loads(text)
@@ -60,23 +58,23 @@ def parse(text):
     if not isinstance(value, list):
         raise InputError("the top-level JSON value is not an array")
 
-    for index, element in enumerate(value):
-        if not isinstance(element, dict):
-            raise InputError("array element %d is not an object" % index)
-
     return value
 
 
-def common_keys(objects):
-    """Return the keys present in every object, ordered by code point.
+def common_keys(elements):
+    """Return the keys present in every object element, ordered by code point.
 
-    Only the objects' own top-level keys count (AMB-001), so a nested object is
-    just another value and its keys are never considered. When the array holds
-    no objects the result is empty and the caller prints ``none`` (AMB-003);
-    when the objects share nothing the result is empty for the same reason.
+    Only an object's own top-level keys count (REQ-002), so a nested object is
+    just another value and its keys are never considered or flattened. An
+    element that is not a JSON object is skipped (AMB-002), so the intersection
+    runs over the object elements only; an array with no object element at all
+    has no common key. Either way the result is empty when nothing is common
+    (AMB-001, REQ-004), which the caller renders as ``none``.
+
     The result is sorted with Python's default string ordering, which is
-    ascending Unicode code point order (AMB-004).
+    ascending Unicode code point order (REQ-003).
     """
+    objects = [element for element in elements if isinstance(element, dict)]
     if not objects:
         return []
 
@@ -104,14 +102,14 @@ def main(argv):
         sys.stderr.write("%s: cannot read %s: %s\n" % (PREFIX, path, error))
         return 1
     except UnicodeDecodeError as error:
-        # A file that is not UTF-8 is malformed input (AMB-002 stop-error):
-        # report it, do not crash with a traceback.
+        # A file that is not UTF-8 is unusable input (AMB-003): report it, do
+        # not crash with a traceback.
         sys.stderr.write("%s: %s: the input is not valid UTF-8: %s\n" % (PREFIX, path, error))
         return 1
 
     try:
-        objects = parse(text)
-        keys = common_keys(objects)
+        elements = parse(text)
+        keys = common_keys(elements)
     except InputError as error:
         sys.stderr.write("%s: %s: %s\n" % (PREFIX, path, error))
         return 1

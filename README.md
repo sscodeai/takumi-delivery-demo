@@ -1,9 +1,9 @@
 # common-keys
 
 A small command-line tool that reads a JSON file holding an array of objects and
-prints the keys that appear in **every** one of those objects, one per line,
-sorted in ascending order. When no key is common to all of them it prints the
-single word `none`.
+prints the keys that appear in **every** one of those objects, one per line, in
+ascending Unicode code point order. When no key is common to all of them it
+prints the single word `none`.
 
 The **current** confirmed requirement is `docs/requirements/intake.yaml`;
 earlier rounds of this repository delivered other families and their documents
@@ -19,7 +19,8 @@ bash common-keys.sh <json-file>
 
 It reads one local JSON file and writes to stdout:
 
-- exactly those keys present in every object, one per line, sorted, or
+- exactly those keys present in every object, one per line, sorted by code
+  point, or
 - the lowercase word `none` when no key is shared.
 
 It exits `0` when it produced an answer (including `none`) and non-zero when it
@@ -38,23 +39,28 @@ $ bash common-keys.sh none.json
 none
 ```
 
-The input is one JSON value: an array whose elements are objects. Anything else
--- a file that does not parse, a file that is not valid UTF-8, a top-level value
-that is not an array, or an array element that is not an object -- is rejected
-(AMB-002). An array that holds no objects at all prints `none` and exits zero
-(AMB-003).
+The input is one JSON value and that value must be an array. An array element
+that is **not** an object is skipped, so the intersection runs over the object
+elements that remain; an array with no object element at all prints `none`.
+Anything that is not usable -- a missing or unreadable file, a file that is not
+valid UTF-8, a file that does not parse, or a top-level value that is not an
+array -- is rejected with a diagnostic on stderr, a non-zero exit and no key
+list on stdout.
 
 ## The recorded decisions
 
-The request leaves four choices open; the confirmed document settles them and
-the implementation applies each one:
+The confirmed document settles three choices and the implementation applies
+each one:
 
 | id | question | chosen |
 | --- | --- | --- |
-| AMB-001 | what counts as a key | `top-level`: only the keys directly on each object; nested keys are never flattened into dotted paths |
-| AMB-002 | malformed input | `stop-error`: a diagnostic on stderr, a non-zero exit, and no key list on stdout |
-| AMB-003 | an array with no objects | `none`: print the single line `none` |
-| AMB-004 | ordering of case-different names | `codepoint`: sort by Unicode code point, so uppercase precedes lowercase |
+| AMB-001 | an array with no objects | `none`: print the single line `none` and exit 0, because no key is common to all zero objects |
+| AMB-002 | a non-object array element | `skip`: ignore the non-object element and intersect the keys of the remaining objects |
+| AMB-003 | malformed input | `error`: exit non-zero and print a diagnostic to stderr, producing no result lines |
+
+Only an object's own top-level keys count; a nested object is just another
+value and its keys are never flattened into dotted paths. The order is ascending
+Unicode code point, so `A` precedes `a`.
 
 ## Stack
 
@@ -65,19 +71,21 @@ the implementation applies each one:
   drives the entry point and the in-process logic, cross-checks both against an
   independent count-based oracle over random arrays, writes a TAP report to
   `reports/tests.tap` and exits 0 only when every case passes.
-- `mutation/common_keys_mutation.py` + `mutation/stryker-cli.mjs` -- the
-  mutation harness behind the declared `npx stryker run --reporters json`,
-  which writes the survivors-json report to `reports/mutation/mutation.json`.
+- `mutation.sh` + `mutation/common_keys_mutation.py` -- the declared mutation
+  entry point; it mutates `common_keys.py`, runs the delivered suite against
+  each mutant, and writes the survivors-json report to
+  `reports/mutation/mutation.json`. `mutation/stryker-cli.mjs` is kept as a
+  compatibility alias for the older `npx stryker run --reporters json` spelling.
 - `.github/workflows/ci.yml` -- the delivery's own pipeline: it runs the test
   suite and reads the TAP report, runs the deliverable on the all-shared,
-  partially-shared and none worlds, and checks the mutation report.
+  partially-shared, none and skipped-element worlds, checks that an unusable
+  input is rejected, and checks the mutation report.
 
 ## Running the checks
 
 ```sh
-bash run-tests.sh                         # writes reports/tests.tap, exits 0 on green
-npx stryker run --reporters json          # writes reports/mutation/mutation.json
+bash run-tests.sh     # writes reports/tests.tap, exits 0 on green
+bash mutation.sh      # writes reports/mutation/mutation.json, exits 0 on no survivors
 ```
 
-Both commands run offline and use only Python 3, Bash and the committed local
-`stryker` launcher.
+Both commands run offline and use only Python 3 and Bash.

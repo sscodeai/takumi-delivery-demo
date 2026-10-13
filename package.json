@@ -3,12 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Keys shared by every object in a JSON array, exposed as common-keys.sh",
-  "bin": {
-    "stryker": "./mutation/stryker-cli.mjs"
-  },
   "scripts": {
     "test": "bash run-tests.sh",
-    "mutation": "node mutation/stryker-cli.mjs run --reporters json"
+    "mutation": "bash mutation.sh"
   },
   "engines": {
     "node": ">=18"
