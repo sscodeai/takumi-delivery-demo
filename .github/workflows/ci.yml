@@ -4,19 +4,21 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY (run 20261013T133508848Z, attempt 1). ci_config regenerated the bare
-# skeleton and, like earlier rounds, it named another project's world: the deliverable step ran
+# REPAIRED FOR THIS DELIVERY (run 20261013T135637681Z, attempt 1). ci_config regenerated the bare
+# skeleton and it again named another project's world: the deliverable step ran
 # `bash common-keys.sh {json}` (a literal placeholder no shell can execute) and the test step
 # preferred a package-manager command over the entry point the confirmed document declares. This
 # file is that skeleton plus the repairs docs/requirements/intake.yaml actually needs:
 #   1. a pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
-#   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`), then reads the declared TAP
-#      report at reports/tests.tap, requires `TAP version 13`, at least one `ok` line, a positive
-#      `# pass` total and no `not ok` line (REQ-004 / SCN-001);
-#   4. a `deliverable` job that runs exactly the declared command (`bash pathfind.sh <mapfile>`) on a
-#      reachable and an unreachable map and diffs the declared answers, and checks that a malformed
-#      map is rejected with a diagnostic on stderr and nothing on stdout (AMB-003); and
+#   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`, the declared SCN-001
+#      command), then reads the declared TAP report at reports/tests.tap, requires `TAP version 13`,
+#      at least one `ok` line, a positive `# pass` total, a `# fail 0` total and no `not ok` line
+#      (REQ-004 / SCN-001);
+#   4. a `deliverable` job that runs exactly the declared command (`bash pathfind.sh {map}`) on a
+#      reachable map, a map whose only route must detour around walls, and an unreachable map, and
+#      diffs the declared answers (REQ-003), then checks that a malformed map is rejected with a
+#      diagnostic on stderr and nothing on stdout (AMB-003); and
 #   5. a `mutation` job that runs the declared mutation command
 #      (`npx stryker run --reporters json`) and checks the declared survivors-json report
 #      (reports/mutation/mutation.json) measured at least one mutant and left no survivor (REQ-005).
@@ -71,8 +73,11 @@ jobs:
               sys.exit("the declared TAP report %s records a failing assertion" % path)
           passes = re.search(r"^# pass (\d+)$", text, re.M)
           tests = re.search(r"^# tests (\d+)$", text, re.M)
+          fails = re.search(r"^# fail (\d+)$", text, re.M)
           if not tests or not passes or int(passes.group(1)) <= 0:
               sys.exit("the declared TAP report %s records no passing assertion" % path)
+          if not fails or int(fails.group(1)) != 0:
+              sys.exit("the declared TAP report %s records a non-zero failure total" % path)
           if int(passes.group(1)) != int(tests.group(1)):
               sys.exit(
                   "the declared TAP report %s passes %s of %s tests"
@@ -94,6 +99,11 @@ jobs:
           .....
           ....E
           TAKUMI_REACHABLE
+          cat > wall-map.txt <<'TAKUMI_WALL'
+          S.#
+          ..#
+          #.E
+          TAKUMI_WALL
           cat > unreachable-map.txt <<'TAKUMI_UNREACHABLE'
           S#
           ##
@@ -102,27 +112,24 @@ jobs:
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 30s bash -c 'bash pathfind.sh reachable-map.txt' > reachable-answer.txt || {
-            rc=$?
-            if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 30s and was killed: bash pathfind.sh reachable-map.txt' >&2
-            fi
-            exit "$rc"
-          }
-          timeout 30s bash -c 'bash pathfind.sh unreachable-map.txt' > unreachable-answer.txt || {
-            rc=$?
-            if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 30s and was killed: bash pathfind.sh unreachable-map.txt' >&2
-            fi
-            exit "$rc"
-          }
+          for map in reachable-map.txt wall-map.txt unreachable-map.txt; do
+            timeout 30s bash pathfind.sh "$map" > "$map.answer" || {
+              rc=$?
+              if [ "$rc" = 124 ]; then
+                echo "the deliverable command did not exit within 30s and was killed: bash pathfind.sh $map" >&2
+              fi
+              exit "$rc"
+            }
+          done
       - name: check the declared answers
         run: |
           set -o pipefail
           printf '8\n' > expected-reachable.txt
+          printf '4\n' > expected-wall.txt
           printf 'unreachable\n' > expected-unreachable.txt
-          diff -u expected-reachable.txt reachable-answer.txt
-          diff -u expected-unreachable.txt unreachable-answer.txt
+          diff -u expected-reachable.txt reachable-map.txt.answer
+          diff -u expected-wall.txt wall-map.txt.answer
+          diff -u expected-unreachable.txt unreachable-map.txt.answer
       - name: check that a malformed map is rejected
         run: |
           set -o pipefail

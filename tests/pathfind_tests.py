@@ -1258,6 +1258,175 @@ def new_amb_003_every_malformed_class_is_a_stop_error():
         parse_error(text, "parse must reject %r" % text)
 
 
+# --- The delivered pipeline (REQ-001..REQ-005 through the workflow) -----------
+#
+# ci_config regenerates .github/workflows/ci.yml from a generic skeleton for
+# every delivery, and the regenerated skeleton can name another project's world
+# (an unexecutable `bash common-keys.sh {json}` placeholder, a package-manager
+# test command) while the delivered suite stays green. These cases pin the
+# repair: the pipeline must carry the declared commands and the declared report
+# paths, every map it feeds the deliverable must be a valid map, and the answers
+# it declares must be exactly what the delivered entry point prints.
+
+WORKFLOW = os.path.join(ROOT, ".github", "workflows", "ci.yml")
+
+
+def workflow_text():
+    with open(WORKFLOW, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def parse_workflow_jobs(text):
+    """Return {job-name: body-lines} for the workflow's ``jobs:`` mapping."""
+    jobs = {}
+    current = None
+    in_jobs = False
+    for line in text.splitlines():
+        if re.match(r"^jobs:\s*$", line):
+            in_jobs = True
+            current = None
+            continue
+        if not in_jobs:
+            continue
+        name = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if name:
+            current = name.group(1)
+            jobs[current] = []
+            continue
+        if current is not None:
+            jobs[current].append(line)
+    return jobs
+
+
+def job_timeout_minutes(body):
+    """The job-level ``timeout-minutes`` (four spaces) in a job body, or None."""
+    for line in body:
+        match = re.match(r"^    timeout-minutes:\s*([0-9]+)\s*$", line)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def heredoc(text, tag):
+    """Return the dedented body lines of the ``<<'tag'`` heredoc in ``text``."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if "<<'%s'" % tag not in line:
+            continue
+        body = []
+        for following in lines[index + 1:]:
+            if following.strip() == tag:
+                # The heredoc sits inside a YAML block scalar, so the shell
+                # sees the body without the workflow's own indentation.
+                return [row.strip() for row in body]
+            body.append(following)
+        raise AssertionError("heredoc %s is never closed" % tag)
+    raise AssertionError("the workflow declares no %s heredoc" % tag)
+
+
+def declared_maps(text):
+    """Return {map-file: grid-lines} for every ``cat > file <<'TAG'`` in the run."""
+    return {
+        name: heredoc(text, tag)
+        for name, tag in re.findall(r"cat > (\S+) <<'([A-Z0-9_]+)'", text)
+    }
+
+
+def declared_answers(text):
+    """Return [(map-file, declared answer)] from the workflow's diff step."""
+    expected = {
+        name: value for value, name in re.findall(r"printf '([^']*)\\n' > (\S+)", text)
+    }
+    pairs = []
+    for expected_file, answer_file in re.findall(r"^\s*diff -u (\S+) (\S+)$", text, re.M):
+        assert expected_file in expected, "%s is diffed but never written" % expected_file
+        assert answer_file.endswith(".answer"), answer_file
+        pairs.append((answer_file[: -len(".answer")], expected[expected_file]))
+    return pairs
+
+
+@case
+def pipeline_declares_the_three_jobs_each_with_a_time_bound():
+    jobs = parse_workflow_jobs(workflow_text())
+    assert {"tests", "deliverable", "mutation"} <= set(jobs), sorted(jobs)
+    for name, body in jobs.items():
+        assert job_timeout_minutes(body) is not None, "job %s has no timeout-minutes" % name
+
+
+@case
+def pipeline_runs_the_declared_test_command_and_reads_the_tap_report():
+    text = workflow_text()
+    assert "bash run-tests.sh" in text, "the pipeline must run the delivered suite"
+    assert "reports/tests.tap" in text, "the pipeline must read the declared TAP report"
+    assert "TAP version 13" in text, "the pipeline must require real TAP"
+
+
+def workflow_code():
+    """The workflow without its comment lines, i.e. what the runner executes."""
+    return "\n".join(
+        line for line in workflow_text().splitlines() if not line.strip().startswith("#")
+    )
+
+
+@case
+def pipeline_runs_the_declared_deliverable_command():
+    text = workflow_text()
+    code = workflow_code()
+    assert "bash pathfind.sh" in text, "the pipeline must run the declared entry point"
+    assert "common-keys.sh" not in code, "the pipeline must not name another project's entry point"
+    assert "{json}" not in code, "the pipeline must not carry an unexecutable placeholder"
+    assert "pnpm test" not in code, "the pipeline must run the declared suite, not a guess"
+
+
+@case
+def pipeline_runs_the_declared_mutation_command_and_reads_its_report():
+    text = workflow_text()
+    assert "npx stryker run --reporters json" in text, "the declared mutation command is missing"
+    assert "reports/mutation/mutation.json" in text, "the declared mutation report is missing"
+
+
+@case
+def pipeline_limits_the_token_and_cancels_superseded_runs():
+    text = workflow_text()
+    permissions = re.search(r"(?ms)^permissions:\s*\n((?:[ \t]+[^\n]*\n)*)", text)
+    assert permissions is not None, "the pipeline grants no permissions block"
+    assert re.search(r"contents:\s*read", permissions.group(1)), permissions.group(1)
+    assert not re.search(r":\s*write", permissions.group(1)), "the pipeline escalates a permission"
+    concurrency = re.search(r"(?ms)^concurrency:\s*\n((?:[ \t]+[^\n]*\n)*)", text)
+    assert concurrency is not None, "the pipeline declares no concurrency block"
+    assert "cancel-in-progress: true" in concurrency.group(1), concurrency.group(1)
+
+
+@case
+def pipeline_maps_are_valid_and_its_answers_match_the_entry_point():
+    text = workflow_text()
+    maps = declared_maps(text)
+    answers = declared_answers(text)
+    assert maps, "the pipeline feeds the deliverable no map"
+    assert answers, "the pipeline declares no expected answer"
+    for map_file, declared in answers:
+        assert map_file in maps, "%s has no map heredoc" % map_file
+        content = "\n".join(maps[map_file]) + "\n"
+        rows, start, end = pathfind.parse(content)
+        distance = reference_distance(rows, start, end)
+        oracle = "unreachable" if distance is None else str(distance)
+        assert declared == oracle, "%s declares %r, the oracle says %r" % (
+            map_file,
+            declared,
+            oracle,
+        )
+        assert answer(content) == declared, "%s: the CLI disagrees with the declared answer" % map_file
+
+
+@case
+def pipeline_map_set_covers_reachable_wall_and_unreachable_worlds():
+    answers = dict(declared_answers(workflow_text()))
+    values = list(answers.values())
+    assert "unreachable" in values, "the pipeline must run an unreachable map"
+    numbers = [int(value) for value in values if value != "unreachable"]
+    assert any(number > 0 for number in numbers), "the pipeline must run a reachable map"
+
+
 # --- Visible, discoverable test entry point (see run-tests.sh) ------------------
 #
 # run-tests.sh at the project root runs this module and exits non-zero when any
