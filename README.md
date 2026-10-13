@@ -1,148 +1,83 @@
-# takumi-delivery-demo
+# common-keys
 
-Demonstration target for takumi's black-box delivery mode: a confirmed
-requirement becomes a delivered product through an independently forged judge, a
-pull request, an issue, a pipeline, and a merge.
+A small command-line tool that reads a JSON file holding an array of objects and
+prints the keys that appear in **every** one of those objects, one per line,
+sorted in ascending order. When no key is common to all of them it prints the
+single word `none`.
 
-The **current** confirmed requirement is `docs/requirements/intake.yaml`: a
-grid-map shortest-path command-line tool. Earlier deliveries left two more
-artifacts in the tree, both kept and documented at the bottom of this file.
+The **current** confirmed requirement is `docs/requirements/intake.yaml`;
+earlier rounds of this repository delivered other families and their documents
+are kept under `docs/` for context.
 
-## The delivered product: `pathfind.sh`
+## The delivered product: `common-keys.sh`
 
 The deliverable is a single command:
 
 ```sh
-bash pathfind.sh <mapfile>
+bash common-keys.sh <json-file>
 ```
 
-It reads one local grid map and writes **exactly one line** to stdout:
+It reads one local JSON file and writes to stdout:
 
-- the number of moves on a shortest path from `S` to `E`, or
-- the lowercase word `unreachable` when no path exists.
+- exactly those keys present in every object, one per line, sorted, or
+- the lowercase word `none` when no key is shared.
 
-It exits `0` when it produced an answer (including `unreachable`) and non-zero
-when it rejected the map, with a diagnostic on stderr.
-
-The map is a rectangle over four characters:
-
-| character | meaning |
-| --- | --- |
-| `#` | wall |
-| `.` | free cell |
-| `S` | the single start (passable) |
-| `E` | the single exit (passable) |
-
-```text
-S....
-.....
-.....
-.....
-....E
-```
-
-```console
-$ bash pathfind.sh map.txt
-8
-```
-
-A map that is not a rectangle over that alphabet, or that does not hold exactly
-one `S` and exactly one `E`, is rejected (AMB-003):
-
-```console
-$ printf 'S.\n.E.\n' > bad.txt && bash pathfind.sh bad.txt
-pathfind.sh: bad.txt: row 2 is 3 cells wide where row 1 is 2
-$ echo $?
-1
-```
-
-Leading and trailing whitespace, blank lines and CRLF line endings are
-normalised away before parsing, so an editor's stray space or blank line is not a
-format error.
-
-### Decisions
-
-The confirmed requirement document settled three ambiguities; the tool honours
-all of them:
-
-| Decision | Chosen option | Behaviour |
-| --- | --- | --- |
-| AMB-001 | orthogonal | Only the four edge-adjacent moves (up, down, left, right) are allowed. |
-| AMB-002 | edges | The printed number counts moves made, so adjacent `S` and `E` print `1`. |
-| AMB-003 | reject | A malformed map exits non-zero with a diagnostic on stderr and prints nothing on stdout. |
-
-### Why this stack
-
-`pathfind.sh` is a thin bash wrapper around `pathfind.py`, which uses only the
-Python 3 standard library (no install step, no network access, works on a
-developer laptop). The search is a breadth-first search with unit edge costs, so
-the first arrival at the exit is a shortest path.
-
-## Tests
+It exits `0` when it produced an answer (including `none`) and non-zero when it
+rejected the input, with a diagnostic on stderr and nothing on stdout.
 
 ```sh
-bash run-tests.sh
+$ printf '[{"a":1,"b":2},{"a":3,"b":4}]' > shared.json
+$ bash common-keys.sh shared.json
+a
+b
+$ printf '[{"a":1,"b":2},{"a":3,"c":4}]' > partial.json
+$ bash common-keys.sh partial.json
+a
+$ printf '[{"x":1},{"y":2}]' > none.json
+$ bash common-keys.sh none.json
+none
 ```
 
-The suite (`tests/pathfind_tests.py`) drives the real entry point through the
-process boundary — `bash pathfind.sh <mapfile>` — on hand-built maps and also
-unit-tests `parse()`, `shortest()` and `main()`. It writes its TAP report to
-`reports/tests.tap` (the path the requirement document names) and exits non-zero
-when any case fails. The report ends with `# tests N` / `# pass N` / `# fail N`
-so a generic TAP reader can read the totals.
+The input is one JSON value: an array whose elements are objects. Anything else
+-- a file that does not parse, a file that is not valid UTF-8, a top-level value
+that is not an array, or an array element that is not an object -- is rejected
+(AMB-002). An array that holds no objects at all prints `none` and exits zero
+(AMB-003).
 
-## Mutation
+## The recorded decisions
 
-The confirmed document declares the mutation tool as:
+The request leaves four choices open; the confirmed document settles them and
+the implementation applies each one:
 
-```text
-npx stryker run --reporters json
+| id | question | chosen |
+| --- | --- | --- |
+| AMB-001 | what counts as a key | `top-level`: only the keys directly on each object; nested keys are never flattened into dotted paths |
+| AMB-002 | malformed input | `stop-error`: a diagnostic on stderr, a non-zero exit, and no key list on stdout |
+| AMB-003 | an array with no objects | `none`: print the single line `none` |
+| AMB-004 | ordering of case-different names | `codepoint`: sort by Unicode code point, so uppercase precedes lowercase |
+
+## Stack
+
+- `common-keys.sh` -- the declared entry point, a thin Bash wrapper.
+- `common_keys.py` -- the JSON parsing and key-intersection logic, using only
+  the Python 3 standard library. No install step, no network access, no stdin.
+- `tests/common_keys_tests.py` + `run-tests.sh` -- the delivered test suite; it
+  drives the entry point and the in-process logic, cross-checks both against an
+  independent count-based oracle over random arrays, writes a TAP report to
+  `reports/tests.tap` and exits 0 only when every case passes.
+- `mutation/common_keys_mutation.py` + `mutation/stryker-cli.mjs` -- the
+  mutation harness behind the declared `npx stryker run --reporters json`,
+  which writes the survivors-json report to `reports/mutation/mutation.json`.
+- `.github/workflows/ci.yml` -- the delivery's own pipeline: it runs the test
+  suite and reads the TAP report, runs the deliverable on the all-shared,
+  partially-shared and none worlds, and checks the mutation report.
+
+## Running the checks
+
+```sh
+bash run-tests.sh                         # writes reports/tests.tap, exits 0 on green
+npx stryker run --reporters json          # writes reports/mutation/mutation.json
 ```
 
-and the report as the tool-agnostic `survivors-json` shape at
-`reports/mutation/mutation.json`, with zero survivors tolerated.
-
-Because the declared report shape is not a mutator-specific one, the project
-ships its own `stryker` executable: `node_modules/.bin/stryker` (declared in
-`package.json`'s `bin` field) launches `mutation/stryker-cli.mjs`, which runs
-`mutation/pathfind_mutation.py`. The harness first runs a control: the delivered
-suite must pass on an unmutated copy, or the run stops with a non-zero exit and
-no report, because a suite that fails for an unrelated reason would "kill"
-every mutant and the gate would measure nothing. It then copies the project into
-a throwaway directory, applies one deliberate defect to `pathfind.py` at a time,
-and runs the delivered suite against the mutant. A mutant the suite still passes
-is a survivor. The copy keeps `node_modules/.bin/stryker`, which the delivered
-suite asserts exists, so a copy can only fail because of the mutant. The command
-exits non-zero when any mutant survives and always writes
-the declared report.
-
-```console
-$ npx stryker run --reporters json
-...
-18 mutant(s), 0 survivor(s)
-```
-
-## Continuous integration
-
-`.github/workflows/ci.yml` is the delivery's pipeline and has three jobs:
-
-- `tests` runs the delivered suite (`bash run-tests.sh`);
-- `deliverable` writes a reachable and an unreachable map, runs exactly
-  `bash pathfind.sh <mapfile>`, diffs both answers, and checks that a malformed
-  map is rejected; and
-- `mutation` runs `npx stryker run --reporters json` and verifies the declared
-  `survivors-json` report measured at least one mutant and left no survivor.
-
-Every job is bounded by `timeout-minutes`, and every long-running command by a
-shorter inner `timeout`, so a command that hangs fails its own job instead of
-waiting out the runner.
-
-## Historical artifacts
-
-Earlier deliveries of the same demo target left two station-summary shapes in
-the tree; they are kept and remain tested by their own suites, but the current
-requirement is the grid pathfinder above.
-
-- `summary.sh` — a CLI that prints per-station temperature counts, min, max and
-  mean from a `date,station,temperature_c` CSV.
-- `serve.sh` + `station_summary.py` — the same summary served as JSON over HTTP.
+Both commands run offline and use only Python 3, Bash and the committed local
+`stryker` launcher.

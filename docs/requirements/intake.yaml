@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-10-13T11:36:07.437Z"
+  at: "2026-10-13T13:56:36.891Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,112 +10,134 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "Which moves are allowed between adjacent cells of the grid?"
-      chosen: "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+      question: "What counts as a key of an object: only the object's own top-level keys, or also nested keys flattened into paths?"
+      chosen: "top-level: only the keys directly present on each object are considered"
       class: unmechanised
       policy: document-default
     - id: AMB-002
-      question: "What does one step of the printed path length count?"
-      chosen: "edges: the number of moves made, so a start adjacent to the exit has length 1"
+      question: "What should happen when the JSON does not parse or an element of the array is not an object?"
+      chosen: "stop-error: print a diagnostic and exit non-zero without printing a key list"
       class: unmechanised
       policy: document-default
     - id: AMB-003
-      question: "How should a map that breaks the declared format be handled?"
-      chosen: "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+      question: "What should be printed when the input array contains no objects at all?"
+      chosen: "none: print the single line none"
+      class: unmechanised
+      policy: document-default
+    - id: AMB-004
+      question: "How are the common keys ordered when their names differ only by case?"
+      chosen: "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
-    title: "Provide the command-line entry point"
-    description: "The deliverable must provide an executable script named pathfind.sh at the repository root. It takes the grid-map file path as its first argument ($1) and, on success, writes exactly one answer line to stdout: either a non-negative integer path length or the lowercase word unreachable. It exits 0 when it produced an answer and non-zero on a rejected input."
+    title: "Provide the common-keys command-line entry point"
+    description: "The repository root must contain a shell entry point named common-keys.sh that takes the path of the JSON input file as its first positional argument ($1) and carries out the whole task with no other input."
     acceptance_criteria:
-      - "bash pathfind.sh <map-file> reads the given file and writes exactly one line to stdout."
-      - "The success output is either an integer greater than or equal to 0 or the single lowercase token unreachable, with no other text on stdout."
-      - "The command exits 0 when it printed an answer and non-zero when it rejected the input."
+      - "Running `bash common-keys.sh <file>` reads the file named by $1 and requires no other arguments and no stdin."
+      - "The command exits 0 for a valid input and writes the result to standard output."
     priority: High
-    source: "a small command-line tool that reads a grid map from a text file ... prints the length ... or 'unreachable'"
+    source: "I want a small command-line tool that reads a JSON file"
   - id: REQ-002
-    title: "Parse the grid-map text format"
-    description: "The tool must read a rectangular grid of characters where '#' is a wall, '.' is a free cell, 'S' is the start and 'E' is the exit. S and E cells are traversable. The map contains exactly one S and exactly one E. A map that violates these rules must be rejected with a non-zero exit and a diagnostic on stderr."
+    title: "Accept a JSON array of objects as input"
+    description: "The input file must hold a single JSON value that is an array whose elements are objects; each element object contributes its key set to the computation."
     acceptance_criteria:
-      - "A map containing '#' and '.' cells with one 'S' and one 'E' is accepted and produces an answer."
-      - "The S cell and the E cell are treated as walkable cells for pathing purposes."
-      - "A map with no S, no E, more than one S, or more than one E causes a non-zero exit and a message on stderr."
-      - "Leading and trailing whitespace on each line, blank lines, and CRLF line endings do not change the parsed grid."
+      - "A well-formed JSON file whose top-level value is an array of objects is accepted."
+      - "A top-level value that is not an array of objects is not treated as a valid input."
     priority: High
-    source: "a grid map from a text file (walls '#', free cells '.', one start 'S' and one exit 'E')"
+    source: "reads a JSON file holding an array of objects"
   - id: REQ-003
-    title: "Print the shortest path length or unreachable"
-    description: "The tool must print the length of the shortest path from S to E measured in steps, where the allowed moves and the definition of a step are the ones recorded by the decisions AMB-001 and AMB-002 in this document. When no path connects S and E under the recorded movement rules, it must print the single lowercase token unreachable instead of a number."
+    title: "Compute the keys common to every object"
+    description: "The tool must report exactly those keys that are present in every object of the input array; a key missing from any single object is not reported."
     acceptance_criteria:
-      - "For a map where a path exists, the printed number equals the shortest number of steps between S and E under the movement rules of AMB-001 and the step definition of AMB-002."
-      - "For a map where the exit is fully walled off from the start, the tool prints unreachable and exits 0."
-      - "A map whose shortest path length is 0 (start coincides with exit, if the format permits it) or any other non-negative integer is printed as a plain decimal integer."
-      - "No judge in this chain yet mechanises the choice between the movement options of AMB-001 or the step definitions of AMB-002; the delivered tests are the only automated check of that behaviour."
+      - "A key present in all input objects is printed."
+      - "A key present in at least one object but not in all of them is not printed."
+      - "When the objects share at least one key, only the shared keys are printed."
     priority: High
-    source: "prints the length of the shortest path from S to E in steps, or 'unreachable'"
+    source: "prints the keys that appear in every one of those objects"
   - id: REQ-004
-    title: "Ship an automated test suite with a TAP report"
-    description: "The deliverable must provide a test entry point run-tests.sh at the repository root that runs the project's own tests, exits 0 only when every test passes, and writes a TAP report to reports/tests.tap. The tests must assert the shortest path length for reachable maps, the unreachable case, and at least one wall-obstacle case."
+    title: "Print one key per line in alphabetical order"
+    description: "Each common key must be printed on its own line, and the printed keys must be sorted in ascending alphabetical order."
     acceptance_criteria:
-      - "bash run-tests.sh completes and writes a TAP report at reports/tests.tap."
-      - "The TAP report contains at least one passing assertion and no failing assertion for the delivered implementation."
-      - "The suite includes an assertion on a shortest path length that requires routing around walls, not merely a straight-line distance."
-      - "The suite includes an assertion that a map with no route prints unreachable."
+      - "Exactly one common key appears on each output line, with no extra text on the line."
+      - "The printed keys appear in ascending alphabetical order."
     priority: High
-    source: "implicit quality requirement: the answer must be checked by the tests the deliverable ships"
+    source: "one per line, sorted alphabetically"
   - id: REQ-005
-    title: "Make the declared mutation tool runnable in the worktree"
-    description: "The project must be set up so that the command declared in deliverable.mutation.run runs inside the delivery worktree without further setup and writes a survivors-json report to the declared mutation report path, reporting every surviving mutant of the delivered test suite. The implementation language and toolchain must be chosen so this declared command applies."
+    title: "Print none when no key is common"
+    description: "When no key is shared by every object, the tool must print the single word none and nothing else."
     acceptance_criteria:
-      - "Running the declared mutation command in the worktree produces a readable report at reports/mutation/mutation.json."
-      - "The report conforms to the survivors-json shape with a total mutant count greater than zero and a survivors list."
-      - "The delivered test suite kills every mutant of the core pathfinding and map-parsing behaviour, so the survivors list is empty."
+      - "An input whose objects share no key produces exactly the single line `none`."
+      - "The literal `none` is printed only when there is no common key."
+    priority: High
+    source: "or the single word none when no key is common to all of them"
+  - id: REQ-006
+    title: "Ship a runnable test suite with a TAP report"
+    description: "The deliverable must include its own automated tests that assert the common-key behaviour and run as `bash run-tests.sh`, writing a TAP report to reports/tests.tap."
+    acceptance_criteria:
+      - "`bash run-tests.sh` completes, exits 0, and writes a TAP report to reports/tests.tap."
+      - "The TAP report contains no failing test line."
+      - "The tests cover the all-shared case, the partially-shared case and the none case."
+    priority: High
+    source: "Implied by the deliverable contract: the answer must be checked by the tests the deliverable ships"
+  - id: REQ-007
+    title: "Apply the recorded decisions for behaviour no relation checks"
+    description: "The choices recorded for key scope (AMB-001), malformed input (AMB-002), empty input (AMB-003) and sort order (AMB-004) must be applied consistently. No declared relation exercises any of these choices, so a judge reports them as not mechanised."
+    acceptance_criteria:
+      - "Key scope follows AMB-001, malformed-input handling follows AMB-002, empty-input handling follows AMB-003, and sort order follows AMB-004."
+      - "None of these behaviours is claimed as mechanised by any relation."
     priority: Medium
-    source: "the request asks for a tool whose behaviour should be pinned down by its own tests, not only by a one-off run"
+    source: "Decisions the request leaves open; the available relation vocabulary for this shape cannot exercise them"
 ambiguities:
   - id: AMB-001
-    question: "Which moves are allowed between adjacent cells of the grid?"
+    question: "What counts as a key of an object: only the object's own top-level keys, or also nested keys flattened into paths?"
     options:
-      - "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
-      - "diagonal: the four edge-adjacent moves plus the four diagonal moves, each costing one step"
-    default: "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+      - "top-level: only the keys directly present on each object are considered"
+      - "deep-paths: keys nested inside sub-objects are flattened into dotted paths and also considered"
+    default: "top-level: only the keys directly present on each object are considered"
     blocking: false
-    chosen: "orthogonal: only the four edge-adjacent moves (up, down, left, right), each costing one step"
+    chosen: "top-level: only the keys directly present on each object are considered"
   - id: AMB-002
-    question: "What does one step of the printed path length count?"
+    question: "What should happen when the JSON does not parse or an element of the array is not an object?"
     options:
-      - "edges: the number of moves made, so a start adjacent to the exit has length 1"
-      - "cells: the number of cells on the path including the start, so a start adjacent to the exit has length 2"
-    default: "edges: the number of moves made, so a start adjacent to the exit has length 1"
+      - "stop-error: print a diagnostic and exit non-zero without printing a key list"
+      - "skip-silent: ignore the unusable element and compute the key set from the remaining objects"
+    default: "stop-error: print a diagnostic and exit non-zero without printing a key list"
     blocking: false
-    chosen: "edges: the number of moves made, so a start adjacent to the exit has length 1"
+    chosen: "stop-error: print a diagnostic and exit non-zero without printing a key list"
   - id: AMB-003
-    question: "How should a map that breaks the declared format be handled?"
+    question: "What should be printed when the input array contains no objects at all?"
     options:
-      - "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
-      - "best-effort: treat unknown characters as walls and pad ragged rows, and answer whenever exactly one S and one E are present"
-    default: "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+      - "none: print the single line none"
+      - "error: exit non-zero because there is no object to intersect"
+    default: "none: print the single line none"
     blocking: false
-    chosen: "reject: exit non-zero and print a diagnostic on stderr for a missing or duplicated S or E, ragged rows, or unknown characters"
+    chosen: "none: print the single line none"
+  - id: AMB-004
+    question: "How are the common keys ordered when their names differ only by case?"
+    options:
+      - "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
+      - "case-insensitive: sort case-insensitively, breaking ties by code point"
+    default: "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
+    blocking: false
+    chosen: "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
 deliverable:
-  run: "bash pathfind.sh {map}"
+  run: "bash common-keys.sh {json}"
   timeoutMs: 10000
   scenarios:
     - id: SCN-001
       run: "bash run-tests.sh"
-      expect: "the delivered test suite passes and its report asserts shortest path lengths for reachable maps and the unreachable case"
+      expect: "the delivered tests pass and assert the set of keys common to every object, printed one per line or as none"
       report: tap
       report_path: "reports/tests.tap"
-      description: "Run the delivered test suite and read its TAP report; a failing or unreadable report fails the scenario."
+      description: "Run the delivered test suite and read its TAP report."
   relations:
     - id: REL-001
       relation: mutation-detection
-      description: "The delivered tests fail when the delivered pathfinding or map-parsing behaviour is mutated."
+      description: "The delivered tests fail when the delivered behaviour is mutated."
   mutation:
     run: "npx stryker run --reporters json"
     report_path: "reports/mutation/mutation.json"
     format: survivors-json
     max_survivors: 0
-    timeoutMs: 900000

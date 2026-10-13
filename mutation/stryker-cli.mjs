@@ -38,7 +38,11 @@ function reportPath(argv) {
 
 const result = spawnSync(
   'python3',
-  [resolve(projectRoot, 'mutation', 'pathfind_mutation.py'), '--report', reportPath(process.argv.slice(2))],
+  [
+    resolve(projectRoot, 'mutation', 'common_keys_mutation.py'),
+    '--report',
+    reportPath(process.argv.slice(2)),
+  ],
   { cwd: projectRoot, stdio: 'inherit' },
 );
 
