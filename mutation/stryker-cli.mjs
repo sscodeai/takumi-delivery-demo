@@ -1,19 +1,18 @@
 #!/usr/bin/env node
-// The declared mutation entry point.
+// Compatibility alias for the mutation harness.
 //
-// docs/requirements/intake.yaml declares the mutation harness as:
+// The confirmed requirement document declares the mutation step as:
 //
 //     mutation:
-//       run:           npx stryker run --reporters json
+//       run:           bash mutation.sh
 //       report_path:   reports/mutation/mutation.json
 //       format:        survivors-json
 //       max_survivors: 0
 //
-// The declared report format is the tool-agnostic survivors-json shape, not a
-// mutator-specific one, so the project ships its own `stryker` executable
-// (node_modules/.bin/stryker, documented in package.json's `bin` field and in
-// the README). It accepts the declared arguments (`run`, `--reporters json`)
-// and hands off to the project's mutation harness, which writes the report to
+// `bash mutation.sh` is the declared entry point. This executable is kept so an
+// older `npx stryker run --reporters json` invocation still works: it accepts
+// the declared arguments and the `--report` path, and hands off to the same
+// harness (mutation/common_keys_mutation.py), which writes the report to
 // reports/mutation/mutation.json by default.
 
 import { spawnSync } from 'node:child_process';

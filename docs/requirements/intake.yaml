@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-10-13T13:56:36.891Z"
+  at: "2026-10-13T14:38:56.072Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,134 +10,130 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "What counts as a key of an object: only the object's own top-level keys, or also nested keys flattened into paths?"
-      chosen: "top-level: only the keys directly present on each object are considered"
+      question: "What should the tool do when the top-level JSON array is empty (zero objects)?"
+      chosen: "none: print the single word none and exit 0, because no key is common to all zero objects"
       class: unmechanised
       policy: document-default
     - id: AMB-002
-      question: "What should happen when the JSON does not parse or an element of the array is not an object?"
-      chosen: "stop-error: print a diagnostic and exit non-zero without printing a key list"
+      question: "What should the tool do with array elements that are not JSON objects (numbers, strings, null, nested arrays)?"
+      chosen: "skip: ignore the non-object element and intersect the keys of the remaining objects"
       class: unmechanised
       policy: document-default
     - id: AMB-003
-      question: "What should be printed when the input array contains no objects at all?"
-      chosen: "none: print the single line none"
-      class: unmechanised
-      policy: document-default
-    - id: AMB-004
-      question: "How are the common keys ordered when their names differ only by case?"
-      chosen: "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
+      question: "What should the tool do when the input file is missing, unreadable, not valid JSON, or its top level is not an array?"
+      chosen: "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
     title: "Provide the common-keys command-line entry point"
-    description: "The repository root must contain a shell entry point named common-keys.sh that takes the path of the JSON input file as its first positional argument ($1) and carries out the whole task with no other input."
+    description: "The deliverable provides an executable script named common-keys.sh at the repository root. It is invoked as `bash common-keys.sh <path-to-json>` and takes the JSON file path as its first positional argument. It reads the JSON file and writes its result to standard output."
     acceptance_criteria:
-      - "Running `bash common-keys.sh <file>` reads the file named by $1 and requires no other arguments and no stdin."
-      - "The command exits 0 for a valid input and writes the result to standard output."
+      - "Running `bash common-keys.sh <file>` on a valid JSON file whose top level is an array of objects exits with status 0."
+      - "The result is written to standard output, not stderr, and the process terminates on its own."
     priority: High
-    source: "I want a small command-line tool that reads a JSON file"
+    source: "Request: 'a small command-line tool that reads a JSON file'."
+
   - id: REQ-002
-    title: "Accept a JSON array of objects as input"
-    description: "The input file must hold a single JSON value that is an array whose elements are objects; each element object contributes its key set to the computation."
+    title: "Intersect the keys of every object in the array"
+    description: "The reported keys are exactly those key names (exact string match) that are present in every object of the top-level array. A key missing from any single object is not reported."
     acceptance_criteria:
-      - "A well-formed JSON file whose top-level value is an array of objects is accepted."
-      - "A top-level value that is not an array of objects is not treated as a valid input."
+      - "Given objects with keys {a,b}, {a,c}, {a,b}, the tool reports only 'a'."
+      - "A key present in all but one object is absent from the output."
     priority: High
-    source: "reads a JSON file holding an array of objects"
+    source: "'prints the keys that appear in every one of those objects'."
+
   - id: REQ-003
-    title: "Compute the keys common to every object"
-    description: "The tool must report exactly those keys that are present in every object of the input array; a key missing from any single object is not reported."
+    title: "Print one common key per line in ascending alphabetical order"
+    description: "Each common key is printed on its own line to standard output. Lines are emitted in ascending alphabetical order, interpreted as ascending Unicode code point order of the key strings; because intersection keys are unique, no tie-breaking is needed."
     acceptance_criteria:
-      - "A key present in all input objects is printed."
-      - "A key present in at least one object but not in all of them is not printed."
-      - "When the objects share at least one key, only the shared keys are printed."
+      - "The output contains one line per common key and no other lines."
+      - "For common keys {b,a,c} the output order is a, b, c."
     priority: High
-    source: "prints the keys that appear in every one of those objects"
+    source: "'one per line, sorted alphabetically'."
+
   - id: REQ-004
-    title: "Print one key per line in alphabetical order"
-    description: "Each common key must be printed on its own line, and the printed keys must be sorted in ascending alphabetical order."
+    title: "Print the single word none when nothing is common"
+    description: "When no key is present in every object, the tool prints exactly one line containing the single lowercase word none and exits with status 0."
     acceptance_criteria:
-      - "Exactly one common key appears on each output line, with no extra text on the line."
-      - "The printed keys appear in ascending alphabetical order."
+      - "For an array whose objects share no key, the complete output is the one line 'none'."
+      - "No other line, prefix or suffix is printed in that case."
     priority: High
-    source: "one per line, sorted alphabetically"
+    source: "'or the single word none when no key is common to all of them'."
+
   - id: REQ-005
-    title: "Print none when no key is common"
-    description: "When no key is shared by every object, the tool must print the single word none and nothing else."
+    title: "Ship the tool's own test suite and its runner"
+    description: "The deliverable ships automated tests for the behaviour above, plus a runner run-tests.sh at the repository root that runs them and writes a TAP report to reports/tests.tap. `bash run-tests.sh` exits 0 only when every delivered test passes."
     acceptance_criteria:
-      - "An input whose objects share no key produces exactly the single line `none`."
-      - "The literal `none` is printed only when there is no common key."
-    priority: High
-    source: "or the single word none when no key is common to all of them"
-  - id: REQ-006
-    title: "Ship a runnable test suite with a TAP report"
-    description: "The deliverable must include its own automated tests that assert the common-key behaviour and run as `bash run-tests.sh`, writing a TAP report to reports/tests.tap."
-    acceptance_criteria:
-      - "`bash run-tests.sh` completes, exits 0, and writes a TAP report to reports/tests.tap."
-      - "The TAP report contains no failing test line."
-      - "The tests cover the all-shared case, the partially-shared case and the none case."
-    priority: High
-    source: "Implied by the deliverable contract: the answer must be checked by the tests the deliverable ships"
-  - id: REQ-007
-    title: "Apply the recorded decisions for behaviour no relation checks"
-    description: "The choices recorded for key scope (AMB-001), malformed input (AMB-002), empty input (AMB-003) and sort order (AMB-004) must be applied consistently. No declared relation exercises any of these choices, so a judge reports them as not mechanised."
-    acceptance_criteria:
-      - "Key scope follows AMB-001, malformed-input handling follows AMB-002, empty-input handling follows AMB-003, and sort order follows AMB-004."
-      - "None of these behaviours is claimed as mechanised by any relation."
+      - "`bash run-tests.sh` exits 0 and writes a readable TAP report at reports/tests.tap."
+      - "The TAP report contains no failing test point when the delivered behaviour is correct."
     priority: Medium
-    source: "Decisions the request leaves open; the available relation vocabulary for this shape cannot exercise them"
+    source: "Deliverable contract in this document; the SCN-001 scenario reads this report."
+
+  - id: REQ-006
+    title: "Ship the mutation harness"
+    description: "The deliverable ships `bash mutation.sh`, which mutates the delivered implementation, runs the delivered tests against each mutant, and writes a survivors-json report to reports/mutation/mutation.json with total and survivors entries."
+    acceptance_criteria:
+      - "`bash mutation.sh` writes reports/mutation/mutation.json in the survivors-json shape with total and survivors keys."
+      - "The report records at least one mutant, so the mutation check is not vacuous."
+    priority: Medium
+    source: "Deliverable contract in this document; the REL-001 mutation-detection relation reads this report."
+
+  - id: REQ-007
+    title: "Resolve undefined input edges as the recorded decisions say"
+    description: "The behaviour for an empty array, for array elements that are not JSON objects, and for a missing, unreadable, non-JSON, or non-array input is exactly what AMB-001, AMB-002 and AMB-003 decide. No automated judge in this document checks these behaviours yet."
+    acceptance_criteria:
+      - "The chosen empty-array behaviour matches AMB-001."
+      - "The chosen non-object-element behaviour matches AMB-002."
+      - "The chosen invalid-input behaviour matches AMB-003."
+    priority: Medium
+    source: "The request does not state edge-case behaviour; recorded as decisions."
+
 ambiguities:
   - id: AMB-001
-    question: "What counts as a key of an object: only the object's own top-level keys, or also nested keys flattened into paths?"
+    question: "What should the tool do when the top-level JSON array is empty (zero objects)?"
     options:
-      - "top-level: only the keys directly present on each object are considered"
-      - "deep-paths: keys nested inside sub-objects are flattened into dotted paths and also considered"
-    default: "top-level: only the keys directly present on each object are considered"
+      - "none: print the single word none and exit 0, because no key is common to all zero objects"
+      - "error: exit non-zero with a diagnostic, because an empty array is not a meaningful query"
+    default: "none: print the single word none and exit 0, because no key is common to all zero objects"
     blocking: false
-    chosen: "top-level: only the keys directly present on each object are considered"
+
+    chosen: "none: print the single word none and exit 0, because no key is common to all zero objects"
   - id: AMB-002
-    question: "What should happen when the JSON does not parse or an element of the array is not an object?"
+    question: "What should the tool do with array elements that are not JSON objects (numbers, strings, null, nested arrays)?"
     options:
-      - "stop-error: print a diagnostic and exit non-zero without printing a key list"
-      - "skip-silent: ignore the unusable element and compute the key set from the remaining objects"
-    default: "stop-error: print a diagnostic and exit non-zero without printing a key list"
+      - "skip: ignore the non-object element and intersect the keys of the remaining objects"
+      - "error: exit non-zero with a diagnostic naming the offending element"
+    default: "skip: ignore the non-object element and intersect the keys of the remaining objects"
     blocking: false
-    chosen: "stop-error: print a diagnostic and exit non-zero without printing a key list"
+
+    chosen: "skip: ignore the non-object element and intersect the keys of the remaining objects"
   - id: AMB-003
-    question: "What should be printed when the input array contains no objects at all?"
+    question: "What should the tool do when the input file is missing, unreadable, not valid JSON, or its top level is not an array?"
     options:
-      - "none: print the single line none"
-      - "error: exit non-zero because there is no object to intersect"
-    default: "none: print the single line none"
+      - "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
+      - "none: print none and exit 0, treating unusable input as an empty intersection"
+    default: "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
     blocking: false
-    chosen: "none: print the single line none"
-  - id: AMB-004
-    question: "How are the common keys ordered when their names differ only by case?"
-    options:
-      - "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
-      - "case-insensitive: sort case-insensitively, breaking ties by code point"
-    default: "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
-    blocking: false
-    chosen: "codepoint: sort by Unicode code point, so uppercase letters precede lowercase ones"
+
+    chosen: "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
 deliverable:
   run: "bash common-keys.sh {json}"
-  timeoutMs: 10000
+  timeoutMs: 30000
   scenarios:
     - id: SCN-001
       run: "bash run-tests.sh"
-      expect: "the delivered tests pass and assert the set of keys common to every object, printed one per line or as none"
+      expect: "the delivered test suite passes and asserts the common-key intersection, its alphabetical ordering, and the none case"
       report: tap
       report_path: "reports/tests.tap"
-      description: "Run the delivered test suite and read its TAP report."
   relations:
     - id: REL-001
       relation: mutation-detection
-      description: "The delivered tests fail when the delivered behaviour is mutated."
+      description: "The delivered tests fail when the delivered common-key behaviour is mutated, as read from the declared mutation report."
   mutation:
-    run: "npx stryker run --reporters json"
+    run: "bash mutation.sh"
     report_path: "reports/mutation/mutation.json"
     format: survivors-json
     max_survivors: 0
+    timeoutMs: 900000
