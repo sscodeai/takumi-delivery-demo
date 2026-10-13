@@ -30,7 +30,7 @@
 # budget instead of occupying a runner until the platform kills it.
 #
 # Verified for this delivery (run 20261013T113608232Z): `bash run-tests.sh` is
-# green (576 tests), `bash mutation.sh` records 14 mutants and 0 survivors on
+# green (628 tests), `bash mutation.sh` records 14 mutants and 0 survivors on
 # reports/mutation/survivors.json, and the deliverable prints the declared
 # report for the declared world.
 name: ci
