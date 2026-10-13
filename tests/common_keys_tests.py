@@ -190,6 +190,14 @@ def req_001_a_directory_argument_is_a_stop_error():
     assert result.stderr.strip() != "", "a directory argument needs a diagnostic"
 
 
+@case
+def req_001_the_entry_point_is_the_declared_root_script():
+    """REQ-001 names the deliverable exactly: common-keys.sh at the root."""
+    assert os.path.isfile(ENTRY), "REQ-001: common-keys.sh must exist at the repository root"
+    assert os.path.basename(ENTRY) == "common-keys.sh", ENTRY
+    assert os.path.dirname(ENTRY) == ROOT, "the entry point must sit at the repository root"
+
+
 # --- REQ-002: the input is an array of objects --------------------------------
 
 
@@ -660,6 +668,22 @@ def independent_oracle_orders_by_code_point():
 
 
 @case
+def req_006_the_declared_mutation_report_path_is_the_default():
+    """REQ-006 AC1: plain ``bash mutation.sh`` writes the declared report path.
+
+    The wrapper must not pass ``--report``, so the harness' default (the path
+    the requirement document names) is what a bare invocation produces.
+    """
+    declared = os.path.join("reports", "mutation", "mutation.json")
+    assert mutation_module.DEFAULT_REPORT == declared, mutation_module.DEFAULT_REPORT
+    with open(MUTATION, encoding="utf-8") as handle:
+        wrapper = handle.read()
+    assert "--report" not in wrapper, (
+        "bash mutation.sh must use the harness default so it writes the declared path"
+    )
+
+
+@case
 def mutation_entry_point_exists_and_parses():
     assert os.path.isfile(MUTATION), "REQ-006: bash mutation.sh must exist at the root"
     result = subprocess.run(["bash", "-n", MUTATION], capture_output=True, text=True, timeout=30)
@@ -755,6 +779,24 @@ def run_runner(test_file):
     env = dict(os.environ, COMMON_KEYS_TEST_FILE=test_file)
     return subprocess.run(
         ["bash", RUNNER], cwd=ROOT, capture_output=True, text=True, timeout=60, env=env
+    )
+
+
+@case
+def req_005_the_root_has_a_discoverable_test_entry_point():
+    """The run's smoke gate needs an invocable entry point it can find.
+
+    REQ-005 declares run-tests.sh at the repository root; the project also
+    exposes the same command as the package.json ``test`` script, so either
+    discovery path runs the delivered suite and preserves its exit status.
+    """
+    assert os.path.isfile(RUNNER), "REQ-005: run-tests.sh must exist at the repository root"
+    assert os.path.dirname(RUNNER) == ROOT, "the runner must sit at the repository root"
+    with open(os.path.join(ROOT, "package.json"), encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    scripts = manifest.get("scripts", {})
+    assert scripts.get("test") == "bash run-tests.sh", (
+        "package.json must expose the delivered suite as its test script: %r" % scripts.get("test")
     )
 
 
