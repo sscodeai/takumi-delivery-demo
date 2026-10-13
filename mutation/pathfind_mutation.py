@@ -147,6 +147,24 @@ MUTANTS = [
         "        line = raw.rstrip()",
         "leading whitespace on a map line is no longer normalised",
     ),
+    (
+        "m19-usage-exit",
+        '        sys.stderr.write("usage: bash pathfind.sh <mapfile>\\n")\n        return 2',
+        '        sys.stderr.write("usage: bash pathfind.sh <mapfile>\\n")\n        return 0',
+        "a missing argument is reported as success",
+    ),
+    (
+        "m20-unreadable-exit",
+        '        sys.stderr.write("pathfind.sh: cannot read %s: %s\\n" % (path, exc))\n        return 1',
+        '        sys.stderr.write("pathfind.sh: cannot read %s: %s\\n" % (path, exc))\n        return 0',
+        "an unreadable map is reported as success",
+    ),
+    (
+        "m21-malformed-exit",
+        '        sys.stderr.write("pathfind.sh: %s: %s\\n" % (path, exc))\n        return 1',
+        '        sys.stderr.write("pathfind.sh: %s: %s\\n" % (path, exc))\n        return 0',
+        "a malformed map is reported as success",
+    ),
 ]
 
 # The copy must be a working project: the delivered suite asserts that the
