@@ -1427,6 +1427,462 @@ def pipeline_map_set_covers_reachable_wall_and_unreachable_worlds():
     assert any(number > 0 for number in numbers), "the pipeline must run a reachable map"
 
 
+# --- Independent verification added by this run's unit-and-integration step ----
+#
+# A FOURTH, self-contained check of every acceptance criterion in
+# docs/requirements/intake.yaml and of the option chosen for every AMB-nnn
+# entry. The oracle is Bellman-Ford edge relaxation over an explicit edge list,
+# independent of the implementation's breadth-first deque and of the Dijkstra
+# and Floyd-Warshall oracles above. Integration cases drive the delivered entry
+# point exactly as the document declares it (``bash pathfind.sh <mapfile>``);
+# unit cases call pathfind.parse/shortest/main directly, so the same contract is
+# pinned on both sides of the process boundary.
+
+FRESH_ANSWER = re.compile(r"\A(0|[1-9][0-9]*|unreachable)\n\Z")
+
+
+def bellman_ford_distance(rows, start, end):
+    """Shortest orthogonal move count by Bellman-Ford edge relaxation.
+
+    Builds the grid graph once and relaxes every edge up to |V|-1 times, where
+    the implementation discovers cells in frontier order and the other oracles
+    in this file use Dijkstra and Floyd-Warshall. Only the four edge-adjacent
+    pairs are edges (AMB-001) and every edge weighs one move (AMB-002), so this
+    is the same contract stated a third way. Returns 0 when the start is the
+    end and None when the two are disconnected.
+    """
+    if start == end:
+        return 0
+    height = len(rows)
+    width = len(rows[0]) if rows else 0
+    index = {}
+    cells = []
+    for row in range(height):
+        for column in range(width):
+            if rows[row][column] != "#":
+                index[(row, column)] = len(cells)
+                cells.append((row, column))
+    if start not in index or end not in index:
+        return None
+    edges = []
+    for (row, column), position in index.items():
+        for neighbour in (
+            (row - 1, column),
+            (row + 1, column),
+            (row, column - 1),
+            (row, column + 1),
+        ):
+            destination = index.get(neighbour)
+            if destination is not None:
+                edges.append((position, destination))
+    distance = [float("inf")] * len(cells)
+    distance[index[start]] = 0
+    for _ in range(len(cells) - 1):
+        changed = False
+        for source, destination in edges:
+            if distance[source] + 1 < distance[destination]:
+                distance[destination] = distance[source] + 1
+                changed = True
+            if distance[destination] + 1 < distance[source]:
+                distance[source] = distance[destination] + 1
+                changed = True
+        if not changed:
+            break
+    result = distance[index[end]]
+    return None if result == float("inf") else result
+
+
+# --- REQ-001: the command-line entry point ------------------------------------
+
+
+@case
+def fresh_req_001_every_accepted_map_prints_one_bare_answer_line():
+    maps = [
+        "SE\n",
+        "S.E\n",
+        "S#E\n",
+        "S....\n.....\n.....\n.....\n....E\n",
+        "S.#\n..#\n#.E\n",
+    ]
+    for text in maps:
+        with tempfile.TemporaryDirectory() as directory:
+            result = run([write_map(directory, text)])
+        assert result.returncode == 0, "%r must exit 0 (%s)" % (text, result.stderr)
+        assert FRESH_ANSWER.match(result.stdout), (
+            "%r must print one bare integer or the lowercase word 'unreachable', got %r"
+            % (text, result.stdout)
+        )
+        assert result.stdout.count("\n") == 1, "%r must print exactly one line" % text
+
+
+@case
+def fresh_req_001_rejections_exit_non_zero_with_a_diagnostic_and_empty_stdout():
+    malformed = [
+        "S.\n.E.\n",
+        "SX\n.E\n",
+        "..\n.E\n",
+        "SS\n.E\n",
+        "S.\n..\n",
+        "S.\nEE\n",
+        "",
+        "\n\n",
+    ]
+    for text in malformed:
+        with tempfile.TemporaryDirectory() as directory:
+            result = run([write_map(directory, text)])
+        assert result.returncode != 0, "%r must be rejected" % text
+        assert result.stderr.strip() != "", "%r must write a diagnostic" % text
+        assert result.stdout == "", "%r must print nothing, got %r" % (text, result.stdout)
+
+    missing = run([])
+    assert missing.returncode != 0 and missing.stderr.strip() != "", "no argument is a stop-error"
+    assert missing.stdout == "", missing.stdout
+
+    absent = run([os.path.join(tempfile.gettempdir(), "no-such-fresh-run-pathfind.txt")])
+    assert absent.returncode != 0 and absent.stderr.strip() != "", "an unreadable map is a stop-error"
+    assert absent.stdout == "", absent.stdout
+
+    with tempfile.TemporaryDirectory() as directory:
+        directory_result = run([directory])
+    assert directory_result.returncode != 0, "a directory is not a readable map"
+    assert directory_result.stderr.strip() != "", "a directory must write a diagnostic"
+    assert directory_result.stdout == "", directory_result.stdout
+
+
+@case
+def fresh_req_001_the_first_argument_selects_which_map_is_read():
+    with tempfile.TemporaryDirectory() as directory:
+        first = write_map(directory, "SE\n")
+        second = os.path.join(directory, "other.txt")
+        with open(second, "w", encoding="utf-8", newline="") as handle:
+            handle.write("S...E\n")
+        first_result = run([first])
+        second_result = run([second])
+    assert first_result.stdout == "1\n", first_result.stdout
+    assert second_result.stdout == "4\n", second_result.stdout
+
+
+@case
+def fresh_req_001_unit_main_exit_code_follows_the_answer_contract():
+    with tempfile.TemporaryDirectory() as directory:
+        ok_code, ok_out, ok_err = captured_main([write_map(directory, "S..E\n")])
+        bad_code, bad_out, bad_err = captured_main([write_map(directory, "SX\n.E\n")])
+    assert ok_code == 0, "an answer exits 0"
+    assert ok_out == "3\n" and ok_err == "", (ok_out, ok_err)
+    assert bad_code != 0, "a rejection exits non-zero"
+    assert bad_out == "" and bad_err.strip() != "", (bad_out, bad_err)
+
+
+# --- REQ-002: the grid-map text format ----------------------------------------
+
+
+@case
+def fresh_req_002_start_and_exit_are_walkable_cells():
+    rows, start, end = pathfind.parse("S.E\n")
+    assert rows == ["S.E"], rows
+    assert start == (0, 0) and end == (0, 2), (start, end)
+    assert pathfind.shortest(rows, start, end) == 2
+    expect_answer("SE\n", "1", "E to the right is a walkable target")
+    expect_answer("S\nE\n", "1", "S can leave its own cell and enter E below")
+    expect_answer("E\nS\n", "1", "E above S is one move")
+
+
+@case
+def fresh_req_002_missing_and_repeated_endpoints_are_rejected_both_ways():
+    for text in ("..\n.E\n", "SS\n.E\n", "S.\n..\n", "S.\nEE\n", "SES\n...\n", "S.E\n.S.\n"):
+        expect_malformed(text, "endpoint violation %r" % text)
+        parse_error(text, "parse must reject %r" % text)
+
+
+@case
+def fresh_req_002_ragged_rows_and_unknown_characters_are_rejected_both_ways():
+    for text in ("S.\n.E.\n", "S..\n.E\n", "S\n.E\n", "SX\n.E\n", "S \n.E\n", "S\t\n.E\n"):
+        expect_malformed(text, "shape or alphabet violation %r" % text)
+        parse_error(text, "parse must reject %r" % text)
+
+
+@case
+def fresh_req_002_whitespace_blank_lines_and_crlf_do_not_change_the_answer():
+    base = "S.#\n..#\n#.E\n"
+    variants = [
+        base,
+        "  " + base.replace("\n", "  \n") + "  ",
+        "\n" + base + "\n\n",
+        base.replace("\n", "\r\n"),
+    ]
+    answers = []
+    for text in variants:
+        with tempfile.TemporaryDirectory() as directory:
+            result = run([write_map(directory, text)])
+        assert result.returncode == 0, "%r must be accepted (%s)" % (text, result.stderr)
+        answers.append(result.stdout)
+    assert len(set(answers)) == 1, answers
+    assert answers[0] == "4\n", answers
+
+
+@case
+def fresh_req_002_single_row_and_single_column_are_rectangles():
+    expect_answer("S.E\n", "2", "a one-row map is a rectangle")
+    expect_answer("S\n.\nE\n", "2", "a one-column map is a rectangle")
+
+
+# --- REQ-003: the shortest path length or unreachable -------------------------
+
+
+@case
+def fresh_req_003_shortest_lengths_match_bellman_ford_on_fixed_maps():
+    fixtures = [
+        "S....\n.....\n.....\n.....\n....E\n",
+        "S.#\n..#\n#.E\n",
+        "S....\n###.#\n#...#\n#.###\n#..E.\n",
+    ]
+    for text in fixtures:
+        rows, start, end = pathfind.parse(text)
+        expected = bellman_ford_distance(rows, start, end)
+        wanted = "unreachable" if expected is None else str(expected)
+        assert answer(text) == wanted, "%r: CLI disagrees with Bellman-Ford" % text
+
+
+@case
+def fresh_req_003_a_wall_maze_forces_a_route_longer_than_the_straight_line():
+    text = "S....\n###.#\n#...#\n#.###\n#..E.\n"
+    rows, start, end = pathfind.parse(text)
+    expected = bellman_ford_distance(rows, start, end)
+    assert expected == 11, "the snake maze is eleven moves, got %r" % expected
+    assert expected > abs(end[0] - start[0]) + abs(end[1] - start[1]), (
+        "the maze must require a detour, not a straight-line distance"
+    )
+    assert answer(text) == "11"
+
+
+@case
+def fresh_req_003_an_unreachable_map_prints_the_word_and_exits_zero():
+    text = "S....\n.###.\n.#E#.\n.###.\n.....\n"
+    rows, start, end = pathfind.parse(text)
+    assert bellman_ford_distance(rows, start, end) is None
+    with tempfile.TemporaryDirectory() as directory:
+        result = run([write_map(directory, text)])
+    assert result.returncode == 0, "unreachable is not an error"
+    assert result.stdout == "unreachable\n", result.stdout
+
+
+@case
+def fresh_req_003_unit_shortest_matches_bellman_ford_on_random_grids():
+    rng = random.Random(314159)
+    for _ in range(300):
+        rows, start, end = random_grid(rng)
+        assert pathfind.shortest(rows, start, end) == bellman_ford_distance(rows, start, end), (
+            "grid %r start %r end %r" % (rows, start, end)
+        )
+
+
+@case
+def fresh_req_003_random_maps_match_bellman_ford_through_the_entry_point():
+    rng = random.Random(161803)
+    checked = 0
+    attempts = 0
+    while checked < 25 and attempts < 600:
+        attempts += 1
+        rows, start, end = random_grid(rng, max_height=6, max_width=6)
+        if start == end:
+            continue
+        rendered = render_fixture(rows, start, end)
+        got = answer(rendered)
+        expected = bellman_ford_distance(rows, start, end)
+        wanted = "unreachable" if expected is None else str(expected)
+        assert got == wanted, "map %r: CLI %r, Bellman-Ford %r" % (rendered, got, wanted)
+        checked += 1
+    assert checked == 25, "the differential produced only %d maps" % checked
+
+
+@case
+def fresh_req_003_a_random_wall_detour_longer_than_manhattan_is_printed():
+    rng = random.Random(2718281)
+    detour = None
+    for _ in range(4000):
+        rows, start, end = random_grid(rng, max_height=6, max_width=6)
+        if start == end:
+            continue
+        distance = bellman_ford_distance(rows, start, end)
+        if distance is None:
+            continue
+        manhattan = abs(end[0] - start[0]) + abs(end[1] - start[1])
+        if distance > manhattan:
+            detour = (rows, start, end, distance)
+            break
+    assert detour is not None, "the generator produced no detour longer than Manhattan"
+    rows, start, end, distance = detour
+    assert answer(render_fixture(rows, start, end)) == str(distance)
+
+
+@case
+def fresh_req_003_the_zero_move_edge_is_rendered_as_a_plain_zero():
+    import unittest.mock as mock
+
+    assert pathfind.shortest(["S"], (0, 0), (0, 0)) == 0
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_map(directory, "S\n")
+        with mock.patch.object(pathfind, "parse", return_value=(["S"], (0, 0), (0, 0))):
+            code, out, err = captured_main([path])
+    assert code == 0, err
+    assert out == "0\n", "the zero answer must be the bare digit 0, got %r" % out
+    assert err == "", err
+
+
+# --- REQ-004: the automated test suite and its TAP report ---------------------
+
+
+@case
+def fresh_req_004_the_tap_renderer_reports_plan_pass_and_fail():
+    green = tap_report([("fresh_green", True, "")])
+    assert green.startswith("TAP version 13\n"), green
+    assert "1..1" in green, green
+    assert "not ok" not in green, green
+    assert "# pass 1" in green and "# fail 0" in green, green
+
+    red = tap_report([("fresh_red", False, "boom")])
+    assert "not ok 1 - fresh_red" in red, red
+    assert "# pass 0" in red and "# fail 1" in red, red
+
+
+@case
+def fresh_req_004_the_entry_point_is_discoverable_and_wired_to_the_runner():
+    with open(os.path.join(ROOT, "package.json"), encoding="utf-8") as handle:
+        package = json.load(handle)
+    assert package.get("scripts", {}).get("test") == "bash run-tests.sh", package.get("scripts")
+    with open(os.path.join(ROOT, "run-tests.sh"), encoding="utf-8") as handle:
+        runner = handle.read()
+    assert "pathfind_tests.py" in runner, "run-tests.sh must run the delivered suite"
+    assert REPORT == os.path.join(ROOT, "reports", "tests.tap"), REPORT
+
+
+def run_suite_with(script_text, name):
+    """Run run-tests.sh against a temporary suite and return the result."""
+    with tempfile.TemporaryDirectory() as directory:
+        suite = os.path.join(directory, name)
+        with open(suite, "w", encoding="utf-8") as handle:
+            handle.write(script_text)
+        environment = dict(os.environ)
+        environment["PATHFIND_TEST_FILE"] = suite
+        return subprocess.run(
+            ["bash", os.path.join(ROOT, "run-tests.sh")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=30,
+        )
+
+
+@case
+def fresh_req_004_the_runner_exits_zero_when_its_suite_passes():
+    result = run_suite_with(
+        "print('TAP version 13')\nprint('1..1')\nprint('ok 1 - green')\n",
+        "passing_suite.py",
+    )
+    assert result.returncode == 0, "run-tests.sh must exit 0 for a passing suite: %s" % result.stderr
+
+
+@case
+def fresh_req_004_the_runner_exits_non_zero_when_its_suite_fails():
+    result = run_suite_with("print('not ok 1 - red')\nraise SystemExit(1)\n", "failing_suite.py")
+    assert result.returncode != 0, "run-tests.sh must exit non-zero for a failing suite"
+
+
+# --- REQ-005: the declared mutation tool ---------------------------------------
+
+
+@case
+def fresh_req_005_the_declared_mutation_command_and_report_path_are_wired():
+    assert os.path.exists(os.path.join(ROOT, "node_modules", ".bin", "stryker")), (
+        "npx stryker must resolve to the committed local binary"
+    )
+    harness = load_mutation_harness()
+    assert harness.DEFAULT_REPORT == os.path.join("reports", "mutation", "mutation.json"), (
+        harness.DEFAULT_REPORT
+    )
+    assert len(harness.MUTANTS) > 0, "the harness must measure at least one mutant"
+    for mutant_id, find, replace, description in harness.MUTANTS:
+        assert mutant_id and description, mutant_id
+        assert find != replace, "mutant %s must change behaviour" % mutant_id
+
+
+@case
+def fresh_req_005_the_declared_report_is_a_survivors_json_with_no_survivor():
+    """Read the declared report the declared command writes, when it is present.
+
+    The full declared-command run and its zero-survivor assertion live in
+    extra_req_005_...; this case pins the declared path, the survivors-json
+    shape and the empty survivors list. A mutation copy has no reports/
+    directory (it is ignored by the harness), so stand down there.
+    """
+    if os.environ.get("PATHFIND_MUTATION_COPY") == "1":
+        return
+    report_path = os.path.join(ROOT, "reports", "mutation", "mutation.json")
+    assert os.path.exists(report_path), "the declared report path must exist: %s" % report_path
+    with open(report_path, encoding="utf-8") as handle:
+        report = json.load(handle)
+    assert isinstance(report, dict), report
+    assert set(report) >= {"total", "survivors"}, report
+    assert isinstance(report["total"], int) and report["total"] > 0, report
+    assert isinstance(report["survivors"], list), report
+    assert report["survivors"] == [], report["survivors"]
+
+
+# --- AMB-001: orthogonal adjacency --------------------------------------------
+
+
+@case
+def fresh_amb_001_orthogonal_adjacency_never_uses_a_diagonal():
+    assert set(pathfind.NEIGHBOURS) == {(-1, 0), (1, 0), (0, -1), (0, 1)}
+    for row, column in pathfind.NEIGHBOURS:
+        assert abs(row) + abs(column) == 1, (row, column)
+    expect_answer("S.\n.E\n", "2", "a diagonal target is two orthogonal moves")
+    expect_answer("S..\n...\n..E\n", "4", "a 3x3 open grid is four orthogonal moves")
+    expect_answer("S#\n#E\n", "unreachable", "a diagonal step is not a move")
+
+
+@case
+def fresh_amb_001_the_orthogonal_answer_matches_the_bellman_ford_contract():
+    rng = random.Random(2024)
+    for _ in range(150):
+        rows, start, end = random_grid(rng)
+        assert pathfind.shortest(rows, start, end) == bellman_ford_distance(rows, start, end)
+
+
+# --- AMB-002: the printed number counts moves, not cells ----------------------
+
+
+@case
+def fresh_amb_002_the_answer_counts_moves_not_cells():
+    expect_answer("SE\n", "1", "adjacent S and E is one move")
+    expect_answer("S.E\n", "2", "S.E is two moves, not three cells")
+    expect_answer("S..E\n", "3", "S..E is three moves, not four cells")
+    expect_answer("S\nE\n", "1", "E below S is one move")
+    for cells, moves in (("SE", 1), ("S.E", 2), ("S..E", 3), ("S...E", 4)):
+        assert pathfind.shortest([cells], (0, 0), (0, len(cells) - 1)) == moves, cells
+
+
+# --- AMB-003: a malformed map is a reject stop-error ---------------------------
+
+
+@case
+def fresh_amb_003_every_malformed_class_is_a_reject_stop_error():
+    malformed = [
+        "",
+        "\n\n",
+        "S.\n.E.\n",
+        "SX\n.E\n",
+        "..\n.E\n",
+        "SS\n.E\n",
+        "S.\n..\n",
+        "S.\nEE\n",
+    ]
+    for text in malformed:
+        expect_malformed(text, "malformed map %r" % text)
+        parse_error(text, "parse must reject %r" % text)
+
+
 # --- Visible, discoverable test entry point (see run-tests.sh) ------------------
 #
 # run-tests.sh at the project root runs this module and exits non-zero when any
