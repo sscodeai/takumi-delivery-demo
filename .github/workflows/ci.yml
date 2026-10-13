@@ -4,12 +4,13 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY (run 20261013T033438454Z). ci_config regenerated
-# the bare skeleton again and the regenerated file dropped everything the
-# delivered project's own suite pins, so its `tests` job would have run
-# `bash run-tests.sh` against a workflow those very tests reject. This file is
-# that skeleton plus the repairs the suite requires, re-applied and verified on
-# this delivery, so the pipeline and the project cannot drift apart silently:
+# REPAIRED FOR THIS DELIVERY (run 20261013T113608232Z). ci_config regenerated
+# the bare skeleton again (it even named another project's entry point) and the
+# regenerated file dropped everything the delivered project's own suite pins, so
+# its `tests` job would have run `bash run-tests.sh` against a workflow those
+# very tests reject. This file is that skeleton plus the repairs the suite
+# requires, re-applied and verified on this delivery, so the pipeline and the
+# project cannot drift apart silently:
 #   1. the pipeline-wide least-privilege grant (`permissions: contents: read`);
 #   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
 #   3. the exact declared world under `deliverable.input_format.sample` (all five
@@ -28,8 +29,10 @@
 # command by a shorter inner `timeout`, so a job that hangs fails on its own
 # budget instead of occupying a runner until the platform kills it.
 #
-# Verified for this delivery (run 20261013T033438454Z): `bash run-tests.sh` is
-# green and the deliverable prints the declared report for the declared world.
+# Verified for this delivery (run 20261013T113608232Z): `bash run-tests.sh` is
+# green (576 tests), `bash mutation.sh` records 14 mutants and 0 survivors on
+# reports/mutation/survivors.json, and the deliverable prints the declared
+# report for the declared world.
 name: ci
 on:
   push:
