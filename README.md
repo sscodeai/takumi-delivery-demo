@@ -145,6 +145,26 @@ fixtures the external acceptance judge builds from the requirement document
 (`tests/test_forged_judge_contract.py`). Together they cover every requirement
 and every confirmed decision in the requirement document.
 
+### End-to-end CLI check
+
+The requirement document declares the deliverable's scenario (SCN-001):
+
+```text
+run:         "bash e2e/check.sh {csv}"
+report:      ctrf
+report_path: "e2e/report.json"
+```
+
+`bash e2e/check.sh <csv-path>` runs `bash summary.sh <csv-path>`, checks the
+printed report against an independent recomputation of the declared world and
+against the declared output contract (one station line per distinct station
+with count/min/max/mean, exactly one `TOTAL` line, exactly one `SKIPPED` line,
+per-station counts summing to the total, ascending byte-wise station order, one
+decimal place), writes a CTRF report to `e2e/report.json`, and exits 0 only when
+every check passed. `tests/test_e2e_check_contract.py` drives the real script
+and reads the report it wrote, and proves the check fails on a wrong
+`summary.sh` instead of passing it.
+
 ### Mutation harness
 
 The confirmed document (`docs/requirements/intake.yaml`) does not ask for a
@@ -171,9 +191,10 @@ measured nothing cannot look green.
 
 - `tests` runs the delivered project's own suite (`bash run-tests.sh`);
 - `deliverable` feeds the tool the exact world the requirement document
-declares, runs it as `bash summary.sh takumi-sample.csv` under a `timeout`, and
+declares, runs it as `bash summary.sh takumi-sample.csv` under a `timeout`,
 diffs the printed report against the declared `ALPHA`/`BRAVO`/`SKIPPED`/`TOTAL`
-lines; and
+lines, and runs the declared end-to-end check (`bash e2e/check.sh
+takumi-sample.csv`), which must exit 0 with a clean CTRF report; and
 - `mutation` runs the extra mutation gate (`bash mutation.sh`), which must
 record zero survivors on `reports/mutation/survivors.json`.
 

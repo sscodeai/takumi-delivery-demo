@@ -81,6 +81,20 @@ jobs:
           TOTAL 5
           TAKUMI_EXPECTED
           diff -u expected.txt report.txt
+      - name: run the declared end-to-end CLI check
+        run: |
+          # The document declares this check as scenario SCN-001
+          # (`bash e2e/check.sh {csv}`) writing a CTRF report to
+          # e2e/report.json, so the pipeline runs it against the same declared
+          # world and fails when the check or its report is not clean.
+          set -o pipefail
+          timeout 120s bash -c 'bash e2e/check.sh takumi-sample.csv' || {
+            rc=$?
+            if [ "$rc" = 124 ]; then
+              echo 'the declared e2e check did not exit within 120s and was killed: bash e2e/check.sh takumi-sample.csv' >&2
+            fi
+            exit "$rc"
+          }
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 20
