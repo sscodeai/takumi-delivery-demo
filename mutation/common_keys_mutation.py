@@ -38,6 +38,16 @@ TARGET = "common_keys.py"
 DEFAULT_REPORT = os.path.join("reports", "mutation", "mutation.json")
 SUITE_TIMEOUT_S = 300
 
+
+class HarnessError(Exception):
+    """The harness could not measure anything, so it fails closed.
+
+    This is an ordinary exception rather than SystemExit so the delivered test
+    suite can record it as a failing point and still write the declared TAP
+    report; main() turns it into a diagnostic and a non-zero exit.
+    """
+
+
 # (id, find, replace, description). Every entry names a defect a delivered test
 # is expected to catch; the descriptions are what the survivors-json report
 # carries, matching the declared survivor shape {file, line, description}.
@@ -249,7 +259,7 @@ def run(report_path):
     control = copy_project()
     try:
         if not run_suite(control):
-            raise SystemExit(
+            raise HarnessError(
                 "mutation harness: the delivered suite fails on an unmutated copy, "
                 "so every mutant would be reported as killed; the mutation report "
                 "would be vacuous"
@@ -262,7 +272,7 @@ def run(report_path):
         total += 1
         index = original_source.find(find)
         if index == -1:
-            raise SystemExit(
+            raise HarnessError(
                 "mutation harness: mutant %s does not match %s; the harness would be vacuous"
                 % (mutant_id, TARGET)
             )
@@ -301,7 +311,11 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", default=DEFAULT_REPORT)
     arguments, _ = parser.parse_known_args(argv)
-    return run(arguments.report)
+    try:
+        return run(arguments.report)
+    except HarnessError as error:
+        sys.stderr.write("%s\n" % error)
+        return 1
 
 
 if __name__ == "__main__":
