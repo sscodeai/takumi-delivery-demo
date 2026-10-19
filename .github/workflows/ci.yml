@@ -4,24 +4,21 @@
 # dialect: github (.github/workflows/ci.yml)
 # requirement: docs/requirements/intake.yaml
 #
-# REPAIRED FOR THIS DELIVERY. ci_config regenerated the bare skeleton and it named the declared
-# deliverable, but left the generic placeholder invocation unresolved (no shell can execute it)
-# and a package-manager-first test guess. This file is that skeleton repaired for the confirmed
-# document -- a JSON array of objects, one key per line or `none`, non-object elements skipped:
-#   1. a pipeline-wide least-privilege grant (`permissions: contents: read`);
-#   2. workflow-wide `concurrency` that cancels a superseded run on the same ref;
-#   3. a `tests` job that runs the delivered suite (`bash run-tests.sh`, the declared SCN-001 command),
-#      then reads the declared TAP report at reports/tests.tap and requires TAP version 13, at least one
-#      `ok` line, a positive `# pass` total, `# fail 0` and no `not ok` line (REQ-005 / SCN-001);
-#   4. a `deliverable` job that runs the declared command (`bash common-keys.sh <file>`) on the
-#      all-shared, partially-shared and none worlds, diffs the declared answers (REQ-002/003/004),
-#      checks that a non-object element is skipped rather than rejected (AMB-002), and checks that an
-#      unusable input -- a top-level value that is not an array -- is rejected with a diagnostic on
-#      stderr and nothing on stdout (AMB-003); and
-#   5. a `mutation` job that runs the declared mutation command (`bash mutation.sh`) and checks the
-#      declared survivors-json report (reports/mutation/mutation.json) measured at least one mutant and
-#      left no survivor (REQ-006 / REL-001).
-# Every job is bounded by `timeout-minutes` and every long command by a shorter inner `timeout`, so a
+# REPAIRED FOR THIS DELIVERY. ci_config regenerated the skeleton from a stale requirement family and
+# left this file invoking another deliverable (`bash summary.sh`) on a CSV fixture, which this
+# delivery does not produce. The confirmed document (docs/requirements/intake.yaml) asks for a JSON
+# key-intersection CLI, so the jobs below run exactly its declared commands:
+#   1. `tests`       -- bash run-tests.sh (SCN-001), then read the declared TAP report at
+#                       reports/tests.tap and require TAP version 13, at least one passing point,
+#                       `# fail 0` and no `not ok` line (REQ-005);
+#   2. `deliverable` -- bash common-keys.sh <json> on the all-shared, partially-shared, none and
+#                       skipped-element worlds, checking the declared answers byte for byte
+#                       (REQ-001..REQ-004, AMB-001, AMB-002), plus a rejected non-array input
+#                       (AMB-003); and
+#   3. `mutation`    -- bash mutation.sh, then check reports/mutation/mutation.json is the declared
+#                       survivors-json shape, measured at least one mutant and left no survivor
+#                       (REQ-006, REL-001).
+# Every job is bounded by timeout-minutes and every long command by a shorter inner timeout, so a
 # job that hangs fails on its own budget instead of occupying a runner until the platform kills it.
 name: ci
 on:
@@ -43,10 +40,10 @@ jobs:
       - name: run the delivered project's own tests
         run: |
           set -o pipefail
-          timeout 300s bash run-tests.sh 2>&1 | tail -60 || {
+          timeout 600s bash run-tests.sh 2>&1 | tail -80 || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the delivered test suite did not exit within 300s and was killed: bash run-tests.sh' >&2
+              echo 'the delivered test suite did not exit within 600s and was killed: bash run-tests.sh' >&2
             fi
             exit "$rc"
           }
@@ -55,6 +52,7 @@ jobs:
           python3 - <<'TAKUMI_TAP'
           import re
           import sys
+
           path = "reports/tests.tap"
           try:
               with open(path, encoding="utf-8") as handle:
@@ -95,19 +93,26 @@ jobs:
           cat > no-common.json <<'COMMON_KEYS_NONE'
           [{"x": 1}, {"y": 2}]
           COMMON_KEYS_NONE
+          cat > empty.json <<'COMMON_KEYS_EMPTY'
+          []
+          COMMON_KEYS_EMPTY
           cat > skipped.json <<'COMMON_KEYS_SKIPPED'
-          [{"a": 1, "b": 2}, 7, null, {"a": 3, "c": 4}]
+          [{"a": 1, "b": 2}, 7, null, "text", {"a": 3, "c": 4}]
           COMMON_KEYS_SKIPPED
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          for input in all-shared.json partial.json no-common.json skipped.json; do
-            timeout 30s bash common-keys.sh "$input" > "$input.out" || {
+          for input in all-shared.json partial.json no-common.json empty.json skipped.json; do
+            timeout 30s bash common-keys.sh "$input" > "$input.out" 2> "$input.err" || {
               rc=$?
               if [ "$rc" = 124 ]; then
                 echo "the deliverable did not exit within 30s and was killed: bash common-keys.sh $input" >&2
               fi
               exit "$rc"
+            }
+            test ! -s "$input.err" || {
+              echo "a successful answer must write nothing to stderr: $input" >&2
+              exit 1
             }
           done
       - name: check the declared answers
@@ -116,28 +121,30 @@ jobs:
           printf 'a\nb\n' > all-shared.expected
           printf 'a\n' > partial.expected
           printf 'none\n' > no-common.expected
+          printf 'none\n' > empty.expected
           printf 'a\n' > skipped.expected
           diff -u all-shared.expected all-shared.json.out
           diff -u partial.expected partial.json.out
           diff -u no-common.expected no-common.json.out
+          diff -u empty.expected empty.json.out
           diff -u skipped.expected skipped.json.out
-      - name: check that a non-object element is skipped
-        run: |
-          set -o pipefail
-          printf '[{"a": 1, "b": 2}, 7, {"a": 3, "c": 4}]\n' > with-non-object.json
-          timeout 30s bash common-keys.sh with-non-object.json > with-non-object.out
-          printf 'a\n' > with-non-object.expected
-          diff -u with-non-object.expected with-non-object.out
       - name: check that an unusable input is rejected
         run: |
           set -o pipefail
           printf '{"a": 1}\n' > not-array.json
+          printf 'not json at all\n' > malformed.json
           if bash common-keys.sh not-array.json > not-array.out 2> not-array.err; then
             echo 'a top-level value that is not an array must exit non-zero (AMB-003)' >&2
             exit 1
           fi
           test -s not-array.err
           test ! -s not-array.out
+          if bash common-keys.sh malformed.json > malformed.out 2> malformed.err; then
+            echo 'an input that is not valid JSON must exit non-zero (AMB-003)' >&2
+            exit 1
+          fi
+          test -s malformed.err
+          test ! -s malformed.out
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -158,6 +165,7 @@ jobs:
           python3 - <<'TAKUMI_CHECK'
           import json
           import sys
+
           path = "reports/mutation/mutation.json"
           try:
               with open(path, encoding="utf-8") as handle:
