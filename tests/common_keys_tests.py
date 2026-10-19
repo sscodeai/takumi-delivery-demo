@@ -26,6 +26,7 @@ import io
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -262,6 +263,19 @@ def req_003_a_key_missing_from_one_object_is_not_printed():
     expect_keys(
         '[{"a": 1, "b": 1}, {"a": 2, "b": 2}, {"a": 3}]', ["a"], "b is missing from the last"
     )
+    expect_keys(
+        '[{"a": 1}, {"a": 2, "b": 2}, {"a": 3, "b": 3}]', ["a"], "b is missing from the first"
+    )
+    expect_keys(
+        '[{"a": 1, "b": 1}, {"a": 2}, {"a": 3, "b": 3}]', ["a"], "b is missing from the middle"
+    )
+
+
+@case
+def req_003_a_key_named_none_is_printed_as_a_key():
+    """The literal key `none` is data, not the sentinel the document declares."""
+    expect_keys('[{"none": 1}, {"none": 2}]', ["none"], "none is a perfectly ordinary key name")
+    expect_none('[{"none": 1}, {"other": 2}]', "no key is shared, so the sentinel is printed")
 
 
 @case
@@ -432,6 +446,15 @@ def amb_002_a_non_object_element_is_skipped():
 
 
 @case
+def amb_002_an_object_before_or_after_the_objects_still_counts():
+    expect_keys('[2, {"a": 1, "b": 2}, {"a": 3, "b": 4}]', ["a", "b"], "a leading non-object")
+    expect_keys('[{"a": 1, "b": 2}, {"a": 3, "b": 4}, null]', ["a", "b"], "a trailing non-object")
+    expect_keys(
+        '[null, {"a": 1}, [1, 2], {"a": 3}, "x"]', ["a"], "non-objects around and between objects"
+    )
+
+
+@case
 def amb_002_the_objects_still_contribute_when_a_non_object_is_present():
     expect_keys('[{"a": 1}, 2, {"a": 3}]', ["a"], "the two objects still share a")
 
@@ -515,6 +538,40 @@ def amb_003_a_utf8_bom_is_rejected_as_malformed():
 def unit_parse_returns_the_whole_array():
     assert common_keys_module.parse('[{"a": 1}, 2, null]') == [{"a": 1}, 2, None]
     assert common_keys_module.parse("[]") == []
+
+
+@case
+def unit_main_prints_a_sorted_intersection():
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_input(directory, '[{"b": 1, "a": 2}, {"b": 3, "a": 4}]')
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stdout, stderr
+        try:
+            status = common_keys_module.main(["common_keys.py", path])
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+    assert status == 0, status
+    assert stdout.getvalue() == "a\nb\n", stdout.getvalue()
+    assert stderr.getvalue() == "", stderr.getvalue()
+
+
+@case
+def unit_main_reports_an_input_error_without_writing_a_result():
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_input(directory, '{"not": "an array"}')
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stdout, stderr
+        try:
+            status = common_keys_module.main(["common_keys.py", path])
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+    assert status != 0, "an unusable input must be a non-zero status"
+    assert stdout.getvalue() == "", stdout.getvalue()
+    assert stderr.getvalue().strip() != "", "the failure needs a diagnostic"
 
 
 @case
@@ -704,37 +761,122 @@ def mutation_harness_patterns_match_the_source():
         assert count == 1, "mutant %s matches %d times in common_keys.py" % (mutant_id, count)
 
 
+def run_harness_with_fake_suite(directory, survivors):
+    """Run the mutation harness' bookkeeping against a fake project and suite.
+
+    The harness is the unit under test here, so its two process-level seams are
+    replaced: ``copy_project`` returns a fresh directory holding a copy of the
+    delivered common_keys.py, and ``run_suite`` reports whether the (fake)
+    suite passed. The control copy is never mutated, so it must always pass;
+    a mutant copy is one whose source differs from the delivered source. The
+    returned list records, per suite run, whether that copy was a mutant.
+    """
+    with open(os.path.join(ROOT, "common_keys.py"), encoding="utf-8") as handle:
+        original_source = handle.read()
+    copies = []
+    applied = []
+
+    def fake_copy_project():
+        path = os.path.join(directory, "project-%d" % len(copies))
+        os.makedirs(path)
+        shutil.copyfile(os.path.join(ROOT, "common_keys.py"), os.path.join(path, "common_keys.py"))
+        copies.append(path)
+        return path
+
+    def fake_run_suite(path):
+        with open(os.path.join(path, "common_keys.py"), encoding="utf-8") as handle:
+            content = handle.read()
+        is_mutant = content != original_source
+        applied.append(is_mutant)
+        if not is_mutant:
+            return True  # the control run must pass on an unmutated copy
+        return survivors
+
+    original_copy = mutation_module.copy_project
+    original_suite = mutation_module.run_suite
+    mutation_module.copy_project = fake_copy_project
+    mutation_module.run_suite = fake_run_suite
+    try:
+        status = mutation_module.run(os.path.join(directory, "mutation.json"))
+    finally:
+        mutation_module.copy_project = original_copy
+        mutation_module.run_suite = original_suite
+    return applied, status
+
+
 @case
 def mutation_harness_writes_a_real_survivors_json_report():
-    """REQ-006: run the harness for real and read back the declared report.
+    """REQ-006: exercise the harness' bookkeeping without a nested full suite.
 
-    The full mutant population is the host's job; here a bounded subset keeps
-    the delivered suite fast while still exercising the harness end to end --
-    copying the project, mutating common_keys.py, running the delivered
-    run-tests.sh against each mutant, and writing the survivors-json report to
-    the declared shape. The harness marks its child suite with
-    COMMON_KEYS_IN_MUTATION (see common_keys_mutation.run_suite) so this case
-    does not recurse when the delivered suite runs inside the harness.
+    Running the real harness inside the delivered suite would make every unit
+    run spawn three full copies of the suite, which is slow and makes the test
+    suite depend on itself recursively. Instead this case supplies a fake
+    project and a fake suite verdict, so the harness' own control run, mutant
+    application, kill counting and survivors-json rendering are all exercised
+    directly. The real end-to-end mutation gate is the separately declared
+    `bash mutation.sh`, which the host runs against this same suite.
 
-    REQ-006 AC2: the report records at least one mutant.
-    REQ-006 AC1: it has exactly the total and survivors keys.
+    REQ-006 AC1: the report has exactly the total and survivors keys.
+    REQ-006 AC2: it records at least one mutant.
     """
-    if os.environ.get("COMMON_KEYS_IN_MUTATION") == "1":
-        return  # already inside the harness; invoking it again would recurse
     original = mutation_module.MUTANTS
     mutation_module.MUTANTS = original[:3]
     try:
         with tempfile.TemporaryDirectory() as directory:
             report_path = os.path.join(directory, "mutation.json")
-            status = mutation_module.run(report_path)
-            assert status == 0, "no mutant of the bounded subset may survive"
+            applied, status = run_harness_with_fake_suite(directory, survivors=False)
+            assert applied == [False, True, True, True], applied
             with open(report_path, encoding="utf-8") as handle:
                 report = json.load(handle)
     finally:
         mutation_module.MUTANTS = original
+    assert status == 0, "no mutant of the bounded subset may survive"
     assert set(report) == {"total", "survivors"}, report
     assert report["total"] == 3, "the harness must record every mutant it ran: %r" % report
     assert report["survivors"] == [], "the delivered tests must kill every mutant: %r" % report
+
+
+@case
+def mutation_harness_records_a_survivor_when_the_suite_passes():
+    """A suite that fails to notice a defect must be reported, not hidden."""
+    original = mutation_module.MUTANTS
+    mutation_module.MUTANTS = original[:2]
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = os.path.join(directory, "mutation.json")
+            applied, status = run_harness_with_fake_suite(directory, survivors=True)
+            with open(report_path, encoding="utf-8") as handle:
+                report = json.load(handle)
+    finally:
+        mutation_module.MUTANTS = original
+    assert applied == [False, True, True], applied
+    assert status != 0, "a survivor must make the harness fail"
+    assert report["total"] == 2, report
+    assert len(report["survivors"]) == 2, report
+    for survivor, (_, _, _, description) in zip(report["survivors"], original[:2]):
+        assert set(survivor) == {"file", "line", "description"}, survivor
+        assert survivor["file"] == "common_keys.py", survivor
+        assert survivor["description"] == description, survivor
+        assert survivor["line"] > 0, survivor
+
+
+@case
+def mutation_harness_fails_closed_when_a_pattern_does_not_match():
+    """A rename must not silently turn the mutation gate into a no-op."""
+    original = mutation_module.MUTANTS
+    mutation_module.MUTANTS = [("m99-missing-pattern", "this text is not in the source", "x", "x")]
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = os.path.join(directory, "mutation.json")
+            try:
+                run_harness_with_fake_suite(directory, survivors=False)
+            except mutation_module.HarnessError:
+                pass
+            else:
+                raise AssertionError("a mutant pattern that matches nothing must fail closed")
+            assert not os.path.exists(report_path), "a failed measurement must not write a passing report"
+    finally:
+        mutation_module.MUTANTS = original
 
 
 # --- the delivered pipeline ---------------------------------------------------
