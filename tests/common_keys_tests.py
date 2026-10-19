@@ -53,6 +53,9 @@ common_keys_module = _load("common_keys_under_test", os.path.join(ROOT, "common_
 mutation_module = _load(
     "mutation_under_test", os.path.join(ROOT, "mutation", "common_keys_mutation.py")
 )
+verify_module = _load(
+    "tap_verifier_under_test", os.path.join(ROOT, "tests", "verify_tap_report.py")
+)
 
 CASES = []
 
@@ -199,6 +202,61 @@ def req_001_the_entry_point_is_the_declared_root_script():
     assert os.path.dirname(ENTRY) == ROOT, "the entry point must sit at the repository root"
 
 
+@case
+def req_001_the_entry_point_runs_from_another_working_directory():
+    """REQ-001 AC2: the wrapper needs no particular current directory.
+
+    It resolves the sibling common_keys.py from its own path, so the caller's
+    working directory must not matter and the process must still finish on its
+    own with the answer on stdout.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_input(directory, '[{"b": 1, "a": 2}, {"b": 3, "a": 4}]')
+        result = subprocess.run(
+            ["bash", ENTRY, path],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "a\nb\n", result.stdout
+    assert result.stderr == "", result.stderr
+
+
+@case
+def req_001_a_relative_input_path_is_resolved_from_the_working_directory():
+    with tempfile.TemporaryDirectory() as directory:
+        write_input(directory, '[{"a": 1}, {"a": 2}]', name="relative.json")
+        result = subprocess.run(
+            ["bash", ENTRY, "relative.json"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "a\n", result.stdout
+
+
+@case
+def req_001_stdin_is_not_consulted():
+    """REQ-001: the input is the file argument, never an ambient stream."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_input(directory, '[{"a": 1}, {"a": 2}]')
+        result = subprocess.run(
+            ["bash", ENTRY, path],
+            input='{"b": 1}',
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "a\n", result.stdout
+
+
 # --- REQ-002: the input is an array of objects --------------------------------
 
 
@@ -252,6 +310,26 @@ def req_002_a_trailing_value_after_the_array_is_rejected():
 @case
 def req_002_duplicate_json_keys_collapse_to_one_key():
     expect_keys('[{"a": 1, "a": 2}, {"a": 3}]', ["a"], "a repeated key is still one key")
+
+
+@case
+def req_002_surrounding_whitespace_is_allowed():
+    """JSON permits whitespace (including CRLF) around the top-level array."""
+    expect_keys(
+        '\n\t [ {"b": 1, "a": 2},\r\n {"b": 3, "a": 4} ]  \n',
+        ["a", "b"],
+        "whitespace around and inside the array is not part of the data",
+    )
+    expect_none("\n[]\n", "whitespace around an empty array")
+
+
+@case
+def req_002_a_key_is_common_regardless_of_its_value_type():
+    expect_keys(
+        '[{"a": null, "b": [1, 2], "c": {"d": 1}}, {"a": true, "b": "x", "c": {}}]',
+        ["a", "b", "c"],
+        "whether a key is common depends on the key, not on the value it carries",
+    )
 
 
 # --- REQ-003 (the intersection): keys common to every object ------------------
@@ -329,6 +407,49 @@ def req_003_nested_keys_are_not_objects_keys():
         ["outer"],
         "inner is a top-level key only in the second object",
     )
+
+
+@case
+def req_003_an_empty_string_is_an_ordinary_key_name():
+    expect_keys('[{"": 1, "a": 2}, {"": 3, "a": 4}]', ["", "a"], "the empty key sorts first")
+    expect_keys('[{"": 1}, {"": 2}]', [""], "the empty key is a real key")
+
+
+@case
+def req_003_raw_utf8_keys_survive_the_process_boundary_in_order():
+    """Multi-byte keys written as real UTF-8 bytes must come back as UTF-8."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_input(
+            directory,
+            '[{"z": 1, "\u00e9": 2, "\u03a9": 3}, {"z": 4, "\u00e9": 5, "\u03a9": 6}]',
+        )
+        result = subprocess.run(
+            ["bash", ENTRY, path], capture_output=True, stdin=subprocess.DEVNULL, timeout=30
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ("z\n\u00e9\n\u03a9\n").encode("utf-8"), result.stdout
+    assert result.stderr == b"", result.stderr
+
+
+@case
+def req_003_astral_plane_keys_are_ordered_by_code_point():
+    """A supplementary-plane code point sorts after every BMP code point."""
+    shared = '{"\\uFFFF": 1, "\\ud83d\\ude00": 2}'
+    expect_keys(
+        "[%s, %s]" % (shared, shared),
+        ["\uffff", "\U0001f600"],
+        "the code point U+FFFF precedes U+1F600",
+    )
+
+
+@case
+def req_003_a_long_array_is_intersected_correctly():
+    """REQ-003 at scale: 2000 objects with two shared keys and 2000 unique ones."""
+    elements = [
+        {"drop": index, "keep": index, "only%d" % index: index} for index in range(2000)
+    ]
+    got = answer(json.dumps(elements))
+    assert got == "drop\nkeep\n", got
 
 
 # --- REQ-003: one per line, sorted --------------------------------------------
@@ -529,6 +650,19 @@ def amb_003_a_utf8_bom_is_rejected_as_malformed():
     # json.loads rejects a leading BOM rather than silently accepting it, so it
     # is one more malformed class that must take the AMB-003 stop-error path.
     expect_reject("\ufeff[]", "a BOM is not valid JSON")
+
+
+@case
+def amb_003_a_dangling_symlink_is_a_clean_stop_error():
+    """A name that cannot be opened is AMB-003, whatever kind of name it is."""
+    with tempfile.TemporaryDirectory() as directory:
+        link = os.path.join(directory, "dangling.json")
+        os.symlink(os.path.join(directory, "missing.json"), link)
+        result = run([link])
+    assert result.returncode != 0, "a dangling symlink must exit non-zero"
+    assert result.stdout == "", "a dangling symlink must print no key list"
+    assert result.stderr.strip() != "", "a dangling symlink needs a diagnostic"
+    assert "Traceback" not in result.stderr, result.stderr
 
 
 # --- unit cases over common_keys.py -------------------------------------------
@@ -984,6 +1118,30 @@ def req_005_the_tap_renderer_reports_the_pass_and_fail_totals():
     assert "# pass 2\n" in text
     assert "# fail 1\n" in text
     assert "# boom" in text
+
+
+@case
+def req_005_the_tap_verifier_accepts_a_green_report():
+    """The runner's REQ-005 artifact check must pass the report this suite writes."""
+    tap = tap_report([("a", True, ""), ("b", True, "")])
+    assert verify_module.validate(tap) == [], verify_module.validate(tap)
+
+
+@case
+def req_005_the_tap_verifier_rejects_a_failing_point():
+    tap = tap_report([("a", True, ""), ("b", False, "boom")])
+    problems = verify_module.validate(tap)
+    assert problems, "a report with a failing test point must be rejected"
+    assert any("failing" in problem for problem in problems), problems
+
+
+@case
+def req_005_the_tap_verifier_rejects_a_malformed_report():
+    assert verify_module.validate("not TAP at all\n"), "a non-TAP file must be rejected"
+    truncated = "TAP version 13\n1..2\nok 1 - a\n"
+    assert verify_module.validate(truncated), "a report without totals must be rejected"
+    empty = "TAP version 13\n1..0\n# tests 0\n# pass 0\n# fail 0\n"
+    assert verify_module.validate(empty), "a report with no passing test must be rejected"
 
 
 # --- TAP report ---------------------------------------------------------------

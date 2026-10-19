@@ -27,6 +27,12 @@
 # runner's stdout for a known summary shape (`# tests N`, `# pass N`, `# fail 0`)
 # finds it at the end of the stream even after a bounded `tail`.
 #
+# Before the report is echoed, tests/verify_tap_report.py checks the artifact
+# itself (REQ-005): it must be TAP version 13 with a 1..N plan, no `not ok`
+# point, and a zero failure total. That way the runner's exit status reflects
+# the report the requirement document tells SCN-001 to read, not merely the
+# suite's own exit code.
+#
 # A caller can point the runner at another Python file with
 # COMMON_KEYS_TEST_FILE so the runner's own exit-code contract stays testable;
 # in that mode the delivered report path is not touched and the summary suite is
@@ -56,6 +62,16 @@ python3 "$TEST_FILE"
 status=$?
 set -e
 
+verifier_status=0
+if [ "$TEST_FILE" = "tests/common_keys_tests.py" ]; then
+  # REQ-005: validate the declared artifact before it is echoed. The verifier
+  # writes to stderr so the TAP report stays the last thing on stdout.
+  set +e
+  python3 tests/verify_tap_report.py 1>&2
+  verifier_status=$?
+  set -e
+fi
+
 if [ "$TEST_FILE" = "tests/common_keys_tests.py" ] && [ -f reports/tests.tap ]; then
   cat reports/tests.tap
 fi
@@ -63,4 +79,10 @@ fi
 if [ "$summary_status" -ne 0 ]; then
   exit "$summary_status"
 fi
-exit "$status"
+if [ "$status" -ne 0 ]; then
+  exit "$status"
+fi
+if [ "$verifier_status" -ne 0 ]; then
+  exit "$verifier_status"
+fi
+exit 0

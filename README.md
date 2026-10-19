@@ -71,6 +71,9 @@ Unicode code point, so `A` precedes `a`.
   drives the entry point and the in-process logic, cross-checks both against an
   independent count-based oracle over random arrays, writes a TAP report to
   `reports/tests.tap` and exits 0 only when every case passes.
+- `tests/verify_tap_report.py` -- the runner's REQ-005 artifact check: before
+  the TAP report is echoed, it must be TAP version 13 with a `1..N` plan, no
+  `not ok` point and a zero failure total.
 - `mutation.sh` + `mutation/common_keys_mutation.py` -- the declared mutation
   entry point; it mutates `common_keys.py`, runs the delivered suite against
   each mutant, and writes the survivors-json report to
