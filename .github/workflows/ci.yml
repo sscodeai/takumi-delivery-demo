@@ -5,16 +5,14 @@
 # requirement: docs/requirements/intake.yaml
 #
 # The ci_config skeleton was generated from a stale requirement family and still invoked a different
-# project's entry point (`bash summary.sh <csv>`) with no relations attached. The confirmed document asks
-# for a JSON key-intersection CLI, so every job below runs exactly the commands that document declares:
+# project's entry point. The confirmed document asks for a JSON key-intersection CLI, so every job below
+# runs exactly the commands that document declares:
 #   tests       -- `bash run-tests.sh` (SCN-001), then require a green TAP report at reports/tests.tap.
 #   deliverable -- `bash common-keys.sh <json>` on the all-shared, partially-shared, none, empty-array
 #                  and skipped-element worlds, plus a rejected unusable input (REQ-001..REQ-004,
 #                  AMB-001..AMB-003).
-#   summary     -- the repository's earlier `bash summary.sh <csv>` CLI, so a reader of either confirmed
-#                  document sees its declared world exercised too.
-#   mutation    -- `bash mutation.sh` (REL-001) and `bash mutation/run.sh`, then read
-#                  reports/mutation/mutation.json and require at least one mutant and zero survivors.
+#   mutation    -- `bash mutation.sh` (REL-001), then read reports/mutation/mutation.json and require at
+#                  least one mutant and zero survivors.
 name: ci
 on:
   push:
@@ -99,39 +97,15 @@ jobs:
           fi
           test ! -s "$tmp/out"
 
-  summary:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: run the summary CLI on the declared sample
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          printf '%s\n' \
-            2024-01-01,ALPHA,10.4 \
-            2024-01-01,BRAVO,-2.5 \
-            2024-01-02,ALPHA,11.6 \
-            2024-01-02,BRAVO,-1.5 \
-            2024-01-03,ALPHA,9.5 > "$tmp/sample.csv"
-          actual="$(bash summary.sh "$tmp/sample.csv")"
-          expected=$'ALPHA 3 9.5 11.6 10.5\nBRAVO 2 -2.5 -1.5 -2.0\nSKIPPED 0\nTOTAL 5'
-          if [ "$actual" != "$expected" ]; then
-            printf 'summary.sh printed %q, expected %q\n' "$actual" "$expected" >&2
-            exit 1
-          fi
-
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: run the declared mutation harnesses
+      - name: run the declared mutation harness
         run: |
           set -o pipefail
           timeout 900s bash mutation.sh 2>&1 | tail -80
-          timeout 900s bash mutation/run.sh 2>&1 | tail -80
       - name: check the declared mutation report
         run: |
           python3 - <<'TAKUMI_MUTATION'
