@@ -70,7 +70,9 @@ Unicode code point, so `A` precedes `a`.
 - `tests/common_keys_tests.py` + `run-tests.sh` -- the delivered test suite; it
   drives the entry point and the in-process logic, cross-checks both against an
   independent count-based oracle over random arrays, writes a TAP report to
-  `reports/tests.tap` and exits 0 only when every case passes.
+  `reports/tests.tap` and exits 0 only when every case passes. The runner also
+  executes `tests/test_acceptance.py`, which names every acceptance criterion
+  and every recorded ambiguity decision.
 - `tests/verify_tap_report.py` -- the runner's REQ-005 artifact check: before
   the TAP report is echoed, it must be TAP version 13 with a `1..N` plan, no
   `not ok` point and a zero failure total.
@@ -108,4 +110,7 @@ bash summary.sh <csv-file>
 prints one `<station> <count> <min> <max> <mean>` line per station in ascending
 byte-wise id order, then a `SKIPPED <count>` line for malformed rows and a
 `TOTAL <count>` line for the valid readings. `tests/test_*.py` is its unittest
-suite; `run-tests.sh` runs it before the declared TAP report.
+suite. It is a compatibility deliverable from an earlier requirement, so the
+common-keys `run-tests.sh` gate does not run it; run it directly with
+`python3 -m unittest discover -s tests -p 'test_*.py'` when changing
+`summary.sh`.

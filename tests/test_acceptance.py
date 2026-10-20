@@ -22,20 +22,24 @@ boundary, exactly as the document declares it:
 The unit cases exercise common_keys.parse() and common_keys.common_keys()
 directly. run-tests.sh discovers this file with
 
-    python3 -m unittest discover -s tests -p 'test_*.py'
+    python3 -m unittest discover -s tests -p 'test_acceptance.py'
 
 so the acceptance pass runs as part of the delivered gate; a failure here makes
 the runner exit non-zero even though the TAP report is written by the other
-suite.
+suite. The legacy summary.sh unittest suite under tests/test_*.py is a separate
+compatibility deliverable and is not part of this requirement's gate.
 """
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "common-keys.sh")
@@ -132,6 +136,13 @@ class IntersectionAcceptance(unittest.TestCase):
         for content in cases:
             with self.subTest(content=content):
                 self.assert_keys(content, ["a"])
+
+    def test_req_002_exact_string_match_after_json_decoding(self):
+        self.assert_keys('[{"\\u00e9": 1}, {"\u00e9": 2}]', ["\u00e9"])
+        result = run_entry('[{"\u00e9": 1}, {"e\u0301": 2}]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, NONE)
+        self.assertEqual(result.stderr, "")
 
 
 class OrderingAcceptance(unittest.TestCase):
@@ -281,6 +292,18 @@ class AmbiguityAcceptance(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertNotEqual(result.stderr.strip(), "")
                 self.assertNotIn("Traceback", result.stderr)
+
+    def test_amb_003_a_permission_denial_is_a_stop_error(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        denial = PermissionError(13, "Permission denied")
+        with mock.patch("builtins.open", side_effect=denial):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = COMMON_KEYS.main(["common_keys.py", "unreadable.json"])
+        self.assertNotEqual(status, 0, "AMB-003: an unreadable file is an error")
+        self.assertEqual(stdout.getvalue(), "", "no result lines on the error path")
+        self.assertIn("cannot read", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
 
 
 class UnitAcceptance(unittest.TestCase):

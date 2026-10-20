@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "common-keys.sh")
@@ -329,6 +330,26 @@ def req_002_a_key_is_common_regardless_of_its_value_type():
         '[{"a": null, "b": [1, 2], "c": {"d": 1}}, {"a": true, "b": "x", "c": {}}]',
         ["a", "b", "c"],
         "whether a key is common depends on the key, not on the value it carries",
+    )
+
+
+@case
+def req_002_key_names_are_matched_exactly_after_json_decoding():
+    """REQ-002: exact string match, not a normalised or fuzzy comparison.
+
+    A JSON escape and its literal spelling decode to the same key, so that
+    pair must be reported. Two different Unicode spellings of the same visual
+    text (precomposed U+00E9 versus e + U+0301) stay distinct key names, so
+    they share nothing.
+    """
+    expect_keys(
+        '[{"\\u00e9": 1}, {"\u00e9": 2}]',
+        ["\u00e9"],
+        "an escape and the literal character decode to the same key name",
+    )
+    expect_none(
+        '[{"\u00e9": 1}, {"e\u0301": 2}]',
+        "precomposed and decomposed spellings are different key names",
     )
 
 
@@ -650,6 +671,30 @@ def amb_003_a_utf8_bom_is_rejected_as_malformed():
     # json.loads rejects a leading BOM rather than silently accepting it, so it
     # is one more malformed class that must take the AMB-003 stop-error path.
     expect_reject("\ufeff[]", "a BOM is not valid JSON")
+
+
+@case
+def amb_003_a_file_that_cannot_be_read_is_a_clean_stop_error():
+    """AMB-003 `unreadable`: a permission failure is a diagnostic, not a crash.
+
+    The suite may run as root, where chmod 000 is still readable, so the denial
+    is injected at the open() seam rather than simulated with file modes. This
+    exercises the implementation's own OSError branch end to end.
+    """
+    with mock.patch("builtins.open", side_effect=PermissionError(13, "Permission denied")):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = stdout, stderr
+        try:
+            status = common_keys_module.main(["common_keys.py", "unreadable.json"])
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+    assert status != 0, "an unreadable file must be a non-zero stop-error"
+    assert stdout.getvalue() == "", "an unreadable file must print no key list"
+    assert stderr.getvalue().strip() != "", "an unreadable file needs a diagnostic"
+    assert "cannot read" in stderr.getvalue(), stderr.getvalue()
+    assert "Traceback" not in stderr.getvalue(), stderr.getvalue()
 
 
 @case
