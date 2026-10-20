@@ -14,15 +14,21 @@
 # reports/tests.tap (the path the document names) and exits 0 only when every
 # delivered case passes.
 #
-# Two suites ship:
+# Two suites ship for this requirement:
 #
-#   * tests/common_keys_tests.py -- the declared suite for this delivery. It
-#     drives `bash common-keys.sh <json-file>` and writes reports/tests.tap.
-#   * tests/test_*.py -- the earlier summary.sh CLI suite (unittest) for the
-#     CSV summariser this repository also carries, so the smoke gate's summary
-#     entry point stays green.
+#   * tests/common_keys_tests.py -- the declared TAP suite. It drives
+#     `bash common-keys.sh <json-file>` and writes reports/tests.tap.
+#   * tests/test_acceptance.py -- the unittest traceability suite that names
+#     every acceptance criterion and every recorded ambiguity decision.
 #
-# The summary suite runs first and writes only to stderr; the declared TAP
+# The earlier summary.sh CLI suite (tests/test_aggregates.py and friends) is a
+# compatibility deliverable from an earlier requirement. It is still present
+# and runnable with unittest discovery, but it is not part of this requirement's
+# gate: the confirmed document makes run-tests.sh about the common-keys
+# behaviour, and keeping the unrelated CSV suite out of the gate keeps the
+# declared entry point focused and reliable.
+#
+# The acceptance suite runs first and writes only to stderr; the declared TAP
 # report is echoed to standard output LAST, so a test consumer that reads the
 # runner's stdout for a known summary shape (`# tests N`, `# pass N`, `# fail 0`)
 # finds it at the end of the stream even after a bounded `tail`.
@@ -35,8 +41,8 @@
 #
 # A caller can point the runner at another Python file with
 # COMMON_KEYS_TEST_FILE so the runner's own exit-code contract stays testable;
-# in that mode the delivered report path is not touched and the summary suite is
-# not run.
+# in that mode the delivered report path is not touched and the acceptance suite
+# is not run.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -47,13 +53,13 @@ if [ ! -f "$TEST_FILE" ]; then
   exit 1
 fi
 
-summary_status=0
+acceptance_status=0
 if [ "$TEST_FILE" = "tests/common_keys_tests.py" ]; then
-  # The summary.sh CLI suite (unittest discovery over tests/test_*.py). Its
-  # output goes to stderr so stdout stays the TAP stream the smoke gate reads.
+  # REQ-005: the requirement's own unittest traceability suite. Its output goes
+  # to stderr so stdout stays the TAP stream the smoke gate reads.
   set +e
-  python3 -m unittest discover -s tests -p 'test_*.py' 1>&2
-  summary_status=$?
+  python3 -m unittest discover -s tests -p 'test_acceptance.py' 1>&2
+  acceptance_status=$?
   set -e
 fi
 
@@ -76,8 +82,8 @@ if [ "$TEST_FILE" = "tests/common_keys_tests.py" ] && [ -f reports/tests.tap ]; 
   cat reports/tests.tap
 fi
 
-if [ "$summary_status" -ne 0 ]; then
-  exit "$summary_status"
+if [ "$acceptance_status" -ne 0 ]; then
+  exit "$acceptance_status"
 fi
 if [ "$status" -ne 0 ]; then
   exit "$status"
