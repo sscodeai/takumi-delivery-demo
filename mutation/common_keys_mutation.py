@@ -208,6 +208,12 @@ MUTANTS = [
         "    return sorted(shared, key=lambda key: key[::-1])",
         "the common keys are ordered by their reversed spelling",
     ),
+    (
+        "m27-nonstandard-constants-accepted",
+        "        value = json.loads(text, parse_constant=reject_constant)",
+        "        value = json.loads(text)",
+        "the non-standard NaN and Infinity constants are accepted as JSON",
+    ),
 ]
 
 # The copy must be a working project, so only VCS metadata, previous reports and

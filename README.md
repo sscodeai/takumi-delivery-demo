@@ -43,9 +43,9 @@ The input is one JSON value and that value must be an array. An array element
 that is **not** an object is skipped, so the intersection runs over the object
 elements that remain; an array with no object element at all prints `none`.
 Anything that is not usable -- a missing or unreadable file, a file that is not
-valid UTF-8, a file that does not parse, or a top-level value that is not an
-array -- is rejected with a diagnostic on stderr, a non-zero exit and no key
-list on stdout.
+valid UTF-8, a file that does not parse (including the non-standard `NaN` and
+`Infinity` literals), or a top-level value that is not an array -- is rejected
+with a diagnostic on stderr, a non-zero exit and no key list on stdout.
 
 ## The recorded decisions
 

@@ -204,6 +204,15 @@ def req_001_the_entry_point_is_the_declared_root_script():
 
 
 @case
+def req_001_the_entry_point_is_executable_and_has_a_shebang():
+    """REQ-001 calls it an executable script, not merely a readable file."""
+    assert os.access(ENTRY, os.X_OK), "common-keys.sh must be executable"
+    with open(ENTRY, encoding="utf-8") as handle:
+        first_line = handle.readline()
+    assert first_line.startswith("#!"), "common-keys.sh must start with a shebang: %r" % first_line
+
+
+@case
 def req_001_the_entry_point_runs_from_another_working_directory():
     """REQ-001 AC2: the wrapper needs no particular current directory.
 
@@ -636,7 +645,18 @@ def amb_002_common_keys_skips_non_objects():
 
 @case
 def amb_003_invalid_json_is_a_clean_stop_error():
-    for text in ("", "   ", "{not json", "[{", '[{"a": }]', "NaN", "[1,]"):
+    for text in (
+        "",
+        "   ",
+        "{not json",
+        "[{",
+        '[{"a": }]',
+        "NaN",
+        "[NaN]",
+        '[{"a": Infinity}]',
+        '[{"a": -Infinity}]',
+        "[1,]",
+    ):
         expect_reject(text, "invalid JSON %r" % text)
     parse_error("", "parse rejects an empty file")
 
@@ -671,6 +691,74 @@ def amb_003_a_utf8_bom_is_rejected_as_malformed():
     # json.loads rejects a leading BOM rather than silently accepting it, so it
     # is one more malformed class that must take the AMB-003 stop-error path.
     expect_reject("\ufeff[]", "a BOM is not valid JSON")
+
+
+@case
+def amb_003_non_standard_json_constants_are_rejected_everywhere():
+    """RFC 8259 has no NaN/Infinity literals; they are unusable input (AMB-003).
+
+    Python's json module accepts these three tokens by default, so the tool has
+    to reject them explicitly. Every placement that could otherwise decode is
+    covered: a top-level scalar, top-level array elements, a nested array, a
+    nested object value, and a document whose top level is not an array.
+    """
+    for text in (
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "[NaN]",
+        "[1, Infinity]",
+        '[{"a": NaN}]',
+        '[{"a": Infinity}]',
+        '[{"a": -Infinity}]',
+        '[{"a": [Infinity]}]',
+        '[{"a": {"b": NaN}}]',
+        '{"a": NaN}',
+    ):
+        expect_reject(text, "the non-standard constant in %r is not JSON" % text)
+        parse_error(text, "parse rejects the non-standard constant in %r" % text)
+
+
+@case
+def amb_003_other_constant_spellings_are_invalid_json():
+    """Only the three Python extensions need special handling; no other spelling
+    (lowercase, prefixed, or suffixed) is valid JSON either."""
+    for text in ("nan", "inf", "Infinityx", "+Infinity", "[nan]", '[{"a": inf}]'):
+        expect_reject(text, "%r is not a JSON value" % text)
+
+
+@case
+def amb_003_constant_names_inside_strings_are_ordinary_values():
+    """The rejection targets bare JSON tokens, never their text inside strings."""
+    expect_keys('[{"NaN": "x"}, {"NaN": "y"}]', ["NaN"], "a key named NaN is data")
+    expect_keys(
+        '[{"a": "NaN", "b": "Infinity"}, {"a": "x", "b": "-Infinity"}]',
+        ["a", "b"],
+        "string values that spell a constant are ordinary strings",
+    )
+
+
+@case
+def unit_reject_constant_is_the_guard_against_python_extensions():
+    for name in ("NaN", "Infinity", "-Infinity"):
+        try:
+            common_keys_module.reject_constant(name)
+        except ValueError as error:
+            assert name in str(error), "the diagnostic should name %s: %s" % (name, error)
+        else:
+            raise AssertionError("reject_constant(%r) must raise ValueError" % name)
+
+
+@case
+def unit_parse_accepts_standard_json_numbers():
+    assert common_keys_module.parse("[0, -2.5, 1e3, 0.5E-2, 1.0, -0]") == [
+        0,
+        -2.5,
+        1000.0,
+        0.005,
+        1.0,
+        0,
+    ]
 
 
 @case
