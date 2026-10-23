@@ -114,6 +114,12 @@ class EntryPointAcceptance(unittest.TestCase):
         self.assert_success(result, "a\nb\n")
         self.assertLess(elapsed, 10.0, "the process must terminate on its own")
 
+    def test_req_001_entry_point_is_an_executable_script(self):
+        self.assertTrue(os.path.isfile(ENTRY), "common-keys.sh must sit at the repository root")
+        self.assertTrue(os.access(ENTRY, os.X_OK), "common-keys.sh must be executable")
+        with open(ENTRY, encoding="utf-8") as handle:
+            self.assertTrue(handle.readline().startswith("#!"), "common-keys.sh needs a shebang")
+
 
 class IntersectionAcceptance(unittest.TestCase):
     """REQ-002: the keys present in every object of the array."""
@@ -167,6 +173,13 @@ class OrderingAcceptance(unittest.TestCase):
         keys = result.stdout.splitlines()
         self.assertEqual(keys, ["1", "A", "B", "a", "z"])
         self.assertEqual(keys, sorted(set(keys)), "no duplicates and no reordering")
+
+    def test_req_003_code_point_order_includes_supplementary_plane_keys(self):
+        shared = '{"\\uFFFF": 1, "\\ud83d\\ude00": 2}'
+        result = run_entry("[%s, %s]" % (shared, shared))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "\uffff\n\U0001f600\n")
+        self.assertEqual(result.stderr, "")
 
 
 class NoneAcceptance(unittest.TestCase):
@@ -285,6 +298,34 @@ class AmbiguityAcceptance(unittest.TestCase):
                 self.assertNotEqual(result.stderr.strip(), "", "a diagnostic is required")
                 self.assertNotIn("Traceback", result.stderr, "a diagnostic, not a crash")
 
+    def test_amb_003_non_standard_constants_are_rejected_in_every_position(self):
+        cases = [
+            "NaN",
+            "Infinity",
+            "-Infinity",
+            "[NaN]",
+            "[1, Infinity]",
+            '[{"a": NaN}]',
+            '[{"a": Infinity}]',
+            '[{"a": -Infinity}]',
+            '[{"a": [Infinity]}]',
+            '[{"a": {"b": -Infinity}}]',
+            '{"a": NaN}',
+        ]
+        for content in cases:
+            with self.subTest(content=content):
+                result = run_entry(content)
+                self.assertNotEqual(result.returncode, 0, "NaN/Infinity are not JSON (AMB-003)")
+                self.assertEqual(result.stdout, "", "no result lines on the error path")
+                self.assertNotEqual(result.stderr.strip(), "", "a diagnostic is required")
+                self.assertNotIn("Traceback", result.stderr, "a diagnostic, not a crash")
+
+    def test_amb_003_constant_names_inside_json_strings_are_ordinary_data(self):
+        result = run_entry('[{"NaN": "Infinity"}, {"NaN": "-Infinity"}]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "NaN\n")
+        self.assertEqual(result.stderr, "")
+
     def test_amb_003_missing_or_unreadable_path_is_a_stop_error(self):
         missing = os.path.join(ROOT, "no-such-input-file.json")
         for path in (missing, tempfile.gettempdir()):
@@ -316,6 +357,20 @@ class UnitAcceptance(unittest.TestCase):
             with self.subTest(text=text):
                 with self.assertRaises(COMMON_KEYS.InputError):
                     COMMON_KEYS.parse(text)
+
+    def test_reject_constant_guards_pythons_non_standard_extensions(self):
+        for name in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    COMMON_KEYS.reject_constant(name)
+                with self.assertRaises(COMMON_KEYS.InputError):
+                    COMMON_KEYS.parse("[%s]" % name)
+
+    def test_parse_accepts_standard_json_numbers(self):
+        self.assertEqual(
+            COMMON_KEYS.parse("[0, -2.5, 1e3, 0.5E-2, 1.0, -0]"),
+            [0, -2.5, 1000.0, 0.005, 1.0, 0],
+        )
 
     def test_parse_returns_the_array_elements(self):
         self.assertEqual(COMMON_KEYS.parse('[{"a": 1}, 2, null]'), [{"a": 1}, 2, None])
