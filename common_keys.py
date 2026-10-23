@@ -41,6 +41,16 @@ class InputError(Exception):
     """The input is not a usable JSON array (AMB-003 error)."""
 
 
+def reject_constant(name):
+    """Reject the NaN/Infinity extensions Python's decoder accepts by default.
+
+    RFC 8259 JSON has no NaN or Infinity literals, so a file that uses them is
+    not valid JSON and therefore takes the AMB-003 stop-error path instead of
+    being decoded into a float.
+    """
+    raise ValueError("%s is not a valid JSON value" % name)
+
+
 def parse(text):
     """Return the top-level array ``text`` holds, else raise InputError.
 
@@ -51,7 +61,7 @@ def parse(text):
     by common_keys().
     """
     try:
-        value = json.loads(text)
+        value = json.loads(text, parse_constant=reject_constant)
     except ValueError as error:
         raise InputError("the input is not valid JSON: %s" % error)
 

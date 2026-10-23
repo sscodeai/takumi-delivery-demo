@@ -270,6 +270,8 @@ class AmbiguityAcceptance(unittest.TestCase):
     def test_amb_003_unusable_input_is_a_clean_non_zero_stop_error(self):
         cases = {
             "invalid JSON": "{not json",
+            "non-standard NaN constant": '[{"a": NaN}]',
+            "non-standard Infinity constant": '[{"a": Infinity}]',
             "empty file": "",
             "top level object": '{"a": 1}',
             "top level string": '"hello"',

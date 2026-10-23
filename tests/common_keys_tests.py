@@ -636,7 +636,18 @@ def amb_002_common_keys_skips_non_objects():
 
 @case
 def amb_003_invalid_json_is_a_clean_stop_error():
-    for text in ("", "   ", "{not json", "[{", '[{"a": }]', "NaN", "[1,]"):
+    for text in (
+        "",
+        "   ",
+        "{not json",
+        "[{",
+        '[{"a": }]',
+        "NaN",
+        "[NaN]",
+        '[{"a": Infinity}]',
+        '[{"a": -Infinity}]',
+        "[1,]",
+    ):
         expect_reject(text, "invalid JSON %r" % text)
     parse_error("", "parse rejects an empty file")
 

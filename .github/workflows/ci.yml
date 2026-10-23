@@ -9,6 +9,10 @@
 #   SCN-001 bash run-tests.sh            -> reports/tests.tap (TAP)
 #   REL-001 bash mutation.sh             -> reports/mutation/mutation.json (survivors-json)
 # Every job below runs exactly those commands.
+#
+# The input worlds are fixed by the recorded decisions: an empty array prints
+# `none` (AMB-001), a non-object element is skipped (AMB-002), and unusable
+# input is a non-zero stop-error with nothing on stdout (AMB-003).
 name: ci
 on:
   push:
