@@ -50,7 +50,9 @@ with a diagnostic on stderr, a non-zero exit and no key list on stdout.
 ## The recorded decisions
 
 The confirmed document settles three choices and the implementation applies
-each one:
+each one. `docs/decisions.md` is the reviewable record: one row per decision
+with the `file:line` anchors that enact it, plus a greppable `AMB-nnn` comment
+above each of those lines (`grep -rn 'AMB-00' common_keys.py`).
 
 | id | question | chosen |
 | --- | --- | --- |

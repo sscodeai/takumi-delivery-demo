@@ -56,6 +56,27 @@ jobs:
               sys.exit("the declared TAP report %s passes %s of %s tests"
                        % (path, passes.group(1), tests.group(1)))
           TAKUMI_TAP
+      - name: check the decision record (ADR-060)
+        run: |
+          python3 - <<'TAKUMI_DECISIONS'
+          import os
+          import re
+          import sys
+
+          path = "docs/decisions.md"
+          with open(path, encoding="utf-8") as handle:
+              text = handle.read()
+          for amb in ("AMB-001", "AMB-002", "AMB-003"):
+              if amb not in text:
+                  sys.exit("%s does not record %s" % (path, amb))
+          for file_name, line in re.findall(r"`([A-Za-z0-9_./-]+\.(?:py|sh)):(\d+)`", text):
+              if not os.path.isfile(file_name):
+                  sys.exit("%s anchors a missing file: %s" % (path, file_name))
+              with open(file_name, encoding="utf-8") as handle:
+                  total = len(handle.read().splitlines())
+              if int(line) > total:
+                  sys.exit("%s anchors %s:%s past the end of the file" % (path, file_name, line))
+          TAKUMI_DECISIONS
   deliverable:
     runs-on: ubuntu-latest
     timeout-minutes: 10

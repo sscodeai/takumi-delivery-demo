@@ -63,9 +63,11 @@ def parse(text):
     try:
         value = json.loads(text, parse_constant=reject_constant)
     except ValueError as error:
+        # AMB-003 (error): a file that is not valid JSON is a stop-error.
         raise InputError("the input is not valid JSON: %s" % error)
 
     if not isinstance(value, list):
+        # AMB-003 (error): a top-level value that is not an array is a stop-error.
         raise InputError("the top-level JSON value is not an array")
 
     return value
@@ -84,7 +86,9 @@ def common_keys(elements):
     The result is sorted with Python's default string ordering, which is
     ascending Unicode code point order (REQ-003).
     """
+    # AMB-002 (skip): a non-object element is ignored, never an error.
     objects = [element for element in elements if isinstance(element, dict)]
+    # AMB-001 (none): zero objects means no common key, which renders as `none`.
     if not objects:
         return []
 
@@ -109,11 +113,12 @@ def main(argv):
         with open(path, "r", encoding="utf-8") as handle:
             text = handle.read()
     except OSError as error:
+        # AMB-003 (error): a missing or unreadable file is a stop-error, not a crash.
         sys.stderr.write("%s: cannot read %s: %s\n" % (PREFIX, path, error))
         return 1
     except UnicodeDecodeError as error:
-        # A file that is not UTF-8 is unusable input (AMB-003): report it, do
-        # not crash with a traceback.
+        # AMB-003 (error): a file that is not UTF-8 is unusable input, so it is a
+        # stop-error rather than a traceback.
         sys.stderr.write("%s: %s: the input is not valid UTF-8: %s\n" % (PREFIX, path, error))
         return 1
 
@@ -128,7 +133,7 @@ def main(argv):
         # One key per line, nothing else: the bare key names.
         sys.stdout.write("".join(key + "\n" for key in keys))
     else:
-        # No key is common to every object: the single lowercase word.
+        # AMB-001 (none): no key is common to every object, so print the word.
         sys.stdout.write("none\n")
     return 0
 
