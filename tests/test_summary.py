@@ -7,9 +7,10 @@ The contract under test is ``docs/requirements/intake.yaml``:
     suite line:  <suite> <passed> <total> <percentage>
     total line:  TOTAL <tests>
 
-Every check drives the real entry point in a subprocess, so what is asserted is
-the behaviour a caller (and the delivery's reviewer) sees, not an internal
-function. The report is written to ``reports/tests.tap`` (override with
+The integration checks here drive the real entry point in a subprocess, so what
+is asserted is the behaviour a caller (and the delivery's reviewer) sees. The
+unit checks live in ``tests/test_units.py`` and are pulled into the same TAP
+report. The report is written to ``reports/tests.tap`` (override with
 ``TAP_OUT``) and echoed to stdout; the process exits 0 only when every check
 passes.
 """
@@ -20,6 +21,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_units import UNIT_TESTS  # noqa: E402 - unit checks share this report
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "summary.sh")
@@ -52,7 +56,7 @@ def csv_file(text, name="input.csv"):
     return path
 
 
-def run(args=None, cwd=None, stdin=None):
+def run(args=None, cwd=None, stdin=None, env=None):
     command = ["bash", SCRIPT] + ([] if args is None else list(args))
     return subprocess.run(
         command,
@@ -61,6 +65,7 @@ def run(args=None, cwd=None, stdin=None):
         capture_output=True,
         text=True,
         timeout=TIMEOUT,
+        env=env,
     )
 
 
@@ -95,6 +100,14 @@ def percentage_of(text, suite):
         if fields[0] == suite:
             return fields[3]
     raise AssertionError("no suite line for %r in %r" % (suite, text))
+
+
+def expected_percentage(passed, total):
+    """Half-up rendering computed independently of summary.percentage."""
+    whole, remainder = divmod(passed * 1000, total)
+    if remainder * 2 >= total:
+        whole += 1
+    return "%d.%d" % (whole // 10, whole % 10)
 
 
 # The document's own sample rows, with the declared header. auth-service spans
@@ -158,6 +171,25 @@ def req_001_relative_input_path_resolves_from_cwd():
     with open(os.path.join(workdir, "records.csv"), "w", encoding="utf-8") as handle:
         handle.write(BASE)
     proc = run(["records.csv"], cwd=workdir)
+    assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
+    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+
+
+def req_001_runs_without_an_install_or_build_step():
+    # Only the interpreter and a shell are on PATH: no virtualenv, no node_modules.
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": SANDBOX,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    proc = run([csv_file(BASE, "minimal-env.csv")], env=env)
+    assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
+    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+
+
+def req_001_input_path_may_contain_spaces():
+    proc = run([csv_file(BASE, "records with spaces.csv")])
     assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
     assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
 
@@ -260,6 +292,52 @@ def req_002_extra_columns_after_the_declared_ones_are_ignored():
     )
 
 
+def req_002_extra_columns_anywhere_do_not_disturb_the_lookup():
+    expect(
+        "note,total,suite,passed\n"
+        "hello,2,alpha,1\n",
+        ["alpha 1 2 50.0", "TOTAL 2"],
+    )
+
+
+def req_002_quoted_header_and_fields_are_read_normally():
+    expect(
+        '"suite","passed","total"\n'
+        '"alpha","1","2"\n',
+        ["alpha 1 2 50.0", "TOTAL 2"],
+    )
+
+
+def req_002_crlf_line_endings_are_accepted():
+    expect(
+        "suite,passed,total\r\n"
+        "alpha,1,2\r\n"
+        "beta,3,4\r\n",
+        ["alpha 1 2 50.0", "beta 3 4 75.0", "TOTAL 6"],
+    )
+
+
+def req_002_utf8_bom_before_the_header_is_ignored():
+    expect(
+        "\ufeffsuite,passed,total\n"
+        "alpha,1,2\n",
+        ["alpha 1 2 50.0", "TOTAL 2"],
+    )
+
+
+def req_002_a_missing_final_newline_is_accepted():
+    expect("suite,passed,total\nalpha,1,2", ["alpha 1 2 50.0", "TOTAL 2"])
+
+
+def req_002_reordered_header_still_merges_a_repeated_suite():
+    expect(
+        "total,passed,suite\n"
+        "2,1,alpha\n"
+        "2,1,alpha\n",
+        ["alpha 2 4 50.0", "TOTAL 4"],
+    )
+
+
 # --- REQ-003: one line per distinct suite, first-appearance order -------------
 
 
@@ -294,6 +372,17 @@ def req_003_suite_names_are_echoed_verbatim():
 def req_003_non_ascii_suite_names_survive():
     out = report("suite,passed,total\ncaf\u00e9-\u00dcnit,1,1\n")
     assert suite_lines("\n".join(out))[0].split(" ")[0] == "caf\u00e9-\u00dcnit", out
+
+
+def req_003_suite_ids_are_not_trimmed():
+    # A quoted leading blank is part of the suite id and must be echoed.
+    out = report('suite,passed,total\n" padded",1,2\n')
+    assert out == [" padded 1 2 50.0", "TOTAL 2"], out
+
+
+def req_003_a_quoted_comma_stays_one_suite_line():
+    out = report('suite,passed,total\n"a,b",1,2\n')
+    assert out == ["a,b 1 2 50.0", "TOTAL 2"], out
 
 
 def req_003_each_suite_line_carries_four_fields():
@@ -371,6 +460,29 @@ def req_004_large_counts_keep_the_exact_ratio():
     assert percentage_of("suite,passed,total\na,1000000,2000000\n", "a") == "50.0"
 
 
+def req_004_decimal_counts_are_exact():
+    out = report("suite,passed,total\na,1.5,3\nb,0.5,2\n")
+    assert out == ["a 1.5 3 50.0", "b 0.5 2 25.0", "TOTAL 5"], out
+
+
+def req_004_percentage_grid_matches_half_up():
+    rows = ["suite,passed,total"]
+    expected = []
+    total = 0
+    for denominator in range(1, 9):
+        for numerator in range(0, denominator + 1):
+            suite = "s-%d-%d" % (numerator, denominator)
+            rows.append("%s,%d,%d" % (suite, numerator, denominator))
+            expected.append(
+                "%s %d %d %s"
+                % (suite, numerator, denominator, expected_percentage(numerator, denominator))
+            )
+            total += denominator
+    expected.append("TOTAL %d" % total)
+    out = report("\n".join(rows) + "\n")
+    assert out == expected, out
+
+
 # --- REQ-005: exactly one TOTAL line, the summed denominator ------------------
 
 
@@ -402,11 +514,27 @@ def req_005_total_sums_every_occurrence_of_a_merged_suite():
     assert out == ["a 2 4 50.0", "TOTAL 4"], out
 
 
+def req_005_total_sums_denominators_across_suites():
+    out = report("suite,passed,total\na,1,2\nb,1,3\na,1,2\n")
+    assert out[-1] == "TOTAL 7", out
+
+
+def req_005_total_keeps_decimal_denominators():
+    out = report("suite,passed,total\na,1,2.5\nb,2,3.5\n")
+    assert out == ["a 1 2.5 40.0", "b 2 3.5 57.1", "TOTAL 6"], out
+
+
 # --- AMB-002: repeated suites merge into one summed line ---------------------
 
 
 def amb_002_merge_sums_passed_and_total():
     assert report(BASE)[0] == "auth-service 50 54 92.6"
+
+
+def amb_002_merge_percentage_uses_the_summed_counts():
+    # first row alone is 100%, last row alone is 0%; merged is 50%.
+    out = report("suite,passed,total\ndup,1,1\ndup,0,1\n")
+    assert out == ["dup 1 2 50.0", "TOTAL 2"], out
 
 
 def amb_002_merge_is_not_the_last_row():
@@ -448,8 +576,23 @@ def amb_003_non_numeric_total_row_is_skipped():
     assert out == ["ok 1 2 50.0", "TOTAL 2"], out
 
 
+def amb_003_empty_count_cells_are_skipped():
+    out = report("suite,passed,total\nok,1,2\nbad,,2\nalso-bad,1,\n")
+    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
+
+
+def amb_003_quoted_non_numeric_counts_are_skipped():
+    out = report('suite,passed,total\nok,1,2\nbad,"n/a",2\n')
+    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
+
+
 def amb_003_zero_total_row_is_skipped():
     out = report("suite,passed,total\nok,1,2\nbad,5,0\n")
+    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
+
+
+def amb_003_zero_total_written_as_a_decimal_is_skipped():
+    out = report("suite,passed,total\nok,1,2\nbad,0,0.0\n")
     assert out == ["ok 1 2 50.0", "TOTAL 2"], out
 
 
@@ -521,6 +664,8 @@ TESTS = [
     ("req_001_process_terminates_on_its_own", req_001_process_terminates_on_its_own),
     ("req_001_runs_from_another_working_directory", req_001_runs_from_another_working_directory),
     ("req_001_relative_input_path_resolves_from_cwd", req_001_relative_input_path_resolves_from_cwd),
+    ("req_001_runs_without_an_install_or_build_step", req_001_runs_without_an_install_or_build_step),
+    ("req_001_input_path_may_contain_spaces", req_001_input_path_may_contain_spaces),
     ("req_001_missing_argument_is_a_usage_error", req_001_missing_argument_is_a_usage_error),
     ("req_001_extra_argument_is_rejected", req_001_extra_argument_is_rejected),
     ("req_001_missing_file_is_a_stop_error", req_001_missing_file_is_a_stop_error),
@@ -535,12 +680,20 @@ TESTS = [
     ("req_002_header_only_file_reports_an_empty_total", req_002_header_only_file_reports_an_empty_total),
     ("req_002_a_data_row_is_not_mistaken_for_a_header", req_002_a_data_row_is_not_mistaken_for_a_header),
     ("req_002_extra_columns_after_the_declared_ones_are_ignored", req_002_extra_columns_after_the_declared_ones_are_ignored),
+    ("req_002_extra_columns_anywhere_do_not_disturb_the_lookup", req_002_extra_columns_anywhere_do_not_disturb_the_lookup),
+    ("req_002_quoted_header_and_fields_are_read_normally", req_002_quoted_header_and_fields_are_read_normally),
+    ("req_002_crlf_line_endings_are_accepted", req_002_crlf_line_endings_are_accepted),
+    ("req_002_utf8_bom_before_the_header_is_ignored", req_002_utf8_bom_before_the_header_is_ignored),
+    ("req_002_a_missing_final_newline_is_accepted", req_002_a_missing_final_newline_is_accepted),
+    ("req_002_reordered_header_still_merges_a_repeated_suite", req_002_reordered_header_still_merges_a_repeated_suite),
     ("req_003_three_distinct_suites_yield_three_lines", req_003_three_distinct_suites_yield_three_lines),
     ("req_003_a_repeated_suite_yields_one_line", req_003_a_repeated_suite_yields_one_line),
     ("req_003_suites_are_in_first_appearance_order", req_003_suites_are_in_first_appearance_order),
     ("req_003_suite_names_are_not_case_folded", req_003_suite_names_are_not_case_folded),
     ("req_003_suite_names_are_echoed_verbatim", req_003_suite_names_are_echoed_verbatim),
     ("req_003_non_ascii_suite_names_survive", req_003_non_ascii_suite_names_survive),
+    ("req_003_suite_ids_are_not_trimmed", req_003_suite_ids_are_not_trimmed),
+    ("req_003_a_quoted_comma_stays_one_suite_line", req_003_a_quoted_comma_stays_one_suite_line),
     ("req_003_each_suite_line_carries_four_fields", req_003_each_suite_line_carries_four_fields),
     ("req_003_the_report_has_no_other_lines", req_003_the_report_has_no_other_lines),
     ("req_003_suite_lines_are_emitted_before_the_total", req_003_suite_lines_are_emitted_before_the_total),
@@ -555,13 +708,18 @@ TESTS = [
     ("amb_001_exact_half_rounds_up_near_zero", amb_001_exact_half_rounds_up_near_zero),
     ("amb_001_non_half_values_round_normally", amb_001_non_half_values_round_normally),
     ("req_004_large_counts_keep_the_exact_ratio", req_004_large_counts_keep_the_exact_ratio),
+    ("req_004_decimal_counts_are_exact", req_004_decimal_counts_are_exact),
+    ("req_004_percentage_grid_matches_half_up", req_004_percentage_grid_matches_half_up),
     ("req_005_total_is_the_sum_of_printed_denominators", req_005_total_is_the_sum_of_printed_denominators),
     ("req_005_there_is_exactly_one_total_line", req_005_there_is_exactly_one_total_line),
     ("req_005_total_is_the_last_line", req_005_total_is_the_last_line),
     ("req_005_header_only_file_total_is_zero", req_005_header_only_file_total_is_zero),
     ("req_005_single_suite_total", req_005_single_suite_total),
     ("req_005_total_sums_every_occurrence_of_a_merged_suite", req_005_total_sums_every_occurrence_of_a_merged_suite),
+    ("req_005_total_sums_denominators_across_suites", req_005_total_sums_denominators_across_suites),
+    ("req_005_total_keeps_decimal_denominators", req_005_total_keeps_decimal_denominators),
     ("amb_002_merge_sums_passed_and_total", amb_002_merge_sums_passed_and_total),
+    ("amb_002_merge_percentage_uses_the_summed_counts", amb_002_merge_percentage_uses_the_summed_counts),
     ("amb_002_merge_is_not_the_last_row", amb_002_merge_is_not_the_last_row),
     ("amb_002_merge_is_not_the_first_row", amb_002_merge_is_not_the_first_row),
     ("amb_002_merge_over_three_occurrences", amb_002_merge_over_three_occurrences),
@@ -569,7 +727,10 @@ TESTS = [
     ("amb_002_merge_keeps_first_appearance_order", amb_002_merge_keeps_first_appearance_order),
     ("amb_003_non_numeric_passed_row_is_skipped", amb_003_non_numeric_passed_row_is_skipped),
     ("amb_003_non_numeric_total_row_is_skipped", amb_003_non_numeric_total_row_is_skipped),
+    ("amb_003_empty_count_cells_are_skipped", amb_003_empty_count_cells_are_skipped),
+    ("amb_003_quoted_non_numeric_counts_are_skipped", amb_003_quoted_non_numeric_counts_are_skipped),
     ("amb_003_zero_total_row_is_skipped", amb_003_zero_total_row_is_skipped),
+    ("amb_003_zero_total_written_as_a_decimal_is_skipped", amb_003_zero_total_written_as_a_decimal_is_skipped),
     ("amb_003_short_row_is_skipped", amb_003_short_row_is_skipped),
     ("amb_003_blank_line_is_skipped", amb_003_blank_line_is_skipped),
     ("amb_003_blank_suite_id_is_skipped", amb_003_blank_suite_id_is_skipped),
@@ -578,7 +739,7 @@ TESTS = [
     ("amb_003_a_suite_with_only_bad_rows_is_absent", amb_003_a_suite_with_only_bad_rows_is_absent),
     ("amb_003_all_rows_bad_still_exits_zero_with_total_zero", amb_003_all_rows_bad_still_exits_zero_with_total_zero),
     ("amb_003_no_skipped_counter_is_printed", amb_003_no_skipped_counter_is_printed),
-]
+] + UNIT_TESTS
 
 
 def emit_tap():

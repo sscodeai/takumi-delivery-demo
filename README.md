@@ -40,8 +40,17 @@ point cannot change a printed digit.
 bash run-tests.sh
 ```
 
-Drives the real entry point and writes the TAP report to `reports/tests.tap`;
-exits 0 only when every check passes.
+Runs both halves of the delivered suite through one TAP report:
+
+* `tests/test_units.py` exercises the functions in `summary.py` directly
+  (header lookup, half-up rendering, aggregation, row skipping, I/O edges);
+* `tests/test_summary.py` drives the real entry point in subprocesses and
+  asserts every acceptance criterion and every `AMB-nnn` decision in
+  `docs/requirements/intake.yaml`.
+
+The report is written to `reports/tests.tap` and echoed to stdout; the runner
+returns non-zero when any check fails. `docs/test-plan.md` maps each
+acceptance criterion to the checks that cover it.
 
 ```
 bash mutation.sh

@@ -31,6 +31,7 @@ DELIVERY_FILES = (
     "summary.py",
     "run-tests.sh",
     os.path.join("tests", "test_summary.py"),
+    os.path.join("tests", "test_units.py"),
 )
 MUTANT_TIMEOUT_S = 300
 

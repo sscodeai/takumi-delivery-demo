@@ -3,10 +3,10 @@
 #
 # Usage: bash run-tests.sh
 #
-# The suite drives the delivered entry point (`bash summary.sh <csv>`) in
-# subprocesses and asserts the contract in docs/requirements/intake.yaml. The
-# report is written to reports/tests.tap and echoed to stdout; this runner exits
-# 0 only when every delivered check passes.
+# The suite combines the unit checks in tests/test_units.py with the integration
+# checks in tests/test_summary.py and asserts the contract in
+# docs/requirements/intake.yaml. The report is written to reports/tests.tap and
+# echoed to stdout; this runner exits 0 only when every delivered check passes.
 #
 # TAP_OUT lets the mutation harness point the same suite at a throwaway report,
 # so a mutant run never overwrites the delivered report.
