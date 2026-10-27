@@ -798,6 +798,90 @@ def amb_003_a_dangling_symlink_is_a_clean_stop_error():
     assert "Traceback" not in result.stderr, result.stderr
 
 
+# --- cross-cutting cases: objects versus non-objects, entry point, sentinel ---
+
+
+@case
+def amb_001_amb_002_an_empty_object_is_an_object_but_an_empty_array_is_not():
+    """AMB-001 and AMB-002 differ only by the element's JSON type.
+
+    An empty object is still an object and takes part in the intersection, so
+    it removes every key. An empty array is not an object, so AMB-002 skips
+    it and the remaining objects keep their shared key. An array whose only
+    element is an empty array therefore has no object at all (AMB-001).
+    """
+    expect_none('[{"a": 1}, {}]', "an empty object is an object and shares no key")
+    expect_keys('[{"a": 1}, []]', ["a"], "an empty array is not an object and is skipped")
+    expect_keys(
+        '[{"a": 1}, [], {"a": 2}]',
+        ["a"],
+        "AMB-002 skips the empty array and the two objects still share a",
+    )
+    expect_none("[[]]", "AMB-001: no object element remains after the skip")
+    assert common_keys_module.common_keys([{"a": 1}, []]) == ["a"]
+    assert common_keys_module.common_keys([{"a": 1}, {}]) == []
+
+
+@case
+def amb_003_a_read_error_after_open_is_a_clean_stop_error():
+    """AMB-003 `unreadable` covers a read that fails, not only an open that fails.
+
+    /proc/self/mem opens successfully but fails when read, which drives the
+    implementation's OSError branch at the read call rather than at open().
+    The path is Linux-specific; elsewhere the mocked-open case still covers the
+    same branch, so this case simply does not apply.
+    """
+    path = "/proc/self/mem"
+    if not os.path.exists(path):
+        return
+    result = run([path])
+    assert result.returncode != 0, "a file that cannot be read must exit non-zero"
+    assert result.stdout == "", "a read failure must print no key list"
+    assert "cannot read" in result.stderr, result.stderr
+    assert "Traceback" not in result.stderr, result.stderr
+
+
+@case
+def req_001_the_entry_point_runs_directly_via_its_shebang():
+    """REQ-001 calls it an executable script; `bash script` is not the only form."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_input(directory, '[{"b": 1, "a": 2}, {"b": 3, "a": 4}]')
+        result = subprocess.run(
+            [ENTRY, path], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "a\nb\n", result.stdout
+    assert result.stderr == "", result.stderr
+
+
+@case
+def req_002_escaped_and_literal_key_spellings_decode_to_the_same_name():
+    """REQ-002 matches key names after JSON decoding, not their source spelling."""
+    expect_keys(
+        '[{"\\u0061": 1}, {"a": 2}]',
+        ["a"],
+        "the escape \\u0061 and the literal a are the same key name",
+    )
+    expect_keys(
+        '[{"\\u00e9": 1}, {"\\u00E9": 2}]',
+        ["\u00e9"],
+        "a lowercase and an uppercase escape spell the same code point",
+    )
+    expect_keys(
+        '[{"a\\tb": 1}, {"a\\tb": 2}]',
+        ["a\tb"],
+        "a decoded tab is part of the exact key name",
+    )
+
+
+@case
+def req_004_the_sentinel_is_the_lowercase_word_only():
+    """REQ-004 prints lowercase `none`; a key may itself be spelled NONE."""
+    expect_keys('[{"NONE": 1}, {"NONE": 2}]', ["NONE"], "NONE is an ordinary key")
+    expect_keys('[{"None": 1}, {"None": 2}]', ["None"], "None is an ordinary key")
+    expect_none('[{"NONE": 1}, {"other": 2}]', "the sentinel is lowercase none")
+
+
 # --- unit cases over common_keys.py -------------------------------------------
 
 

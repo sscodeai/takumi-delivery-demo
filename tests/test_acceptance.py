@@ -120,6 +120,20 @@ class EntryPointAcceptance(unittest.TestCase):
         with open(ENTRY, encoding="utf-8") as handle:
             self.assertTrue(handle.readline().startswith("#!"), "common-keys.sh needs a shebang")
 
+    def test_req_001_entry_point_runs_directly_via_its_shebang(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "input.json")
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write('[{"b": 1, "a": 2}, {"b": 3, "a": 4}]')
+            result = subprocess.run(
+                [ENTRY, path],
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=30,
+            )
+        self.assert_success(result, "a\nb\n")
+
 
 class IntersectionAcceptance(unittest.TestCase):
     """REQ-002: the keys present in every object of the array."""
@@ -149,6 +163,11 @@ class IntersectionAcceptance(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, NONE)
         self.assertEqual(result.stderr, "")
+
+    def test_req_002_escaped_and_literal_spellings_are_the_same_key_name(self):
+        self.assert_keys('[{"\\u0061": 1}, {"a": 2}]', ["a"])
+        self.assert_keys('[{"\\u00e9": 1}, {"\\u00E9": 2}]', ["\u00e9"])
+        self.assert_keys('[{"a\\tb": 1}, {"a\\tb": 2}]', ["a\tb"])
 
 
 class OrderingAcceptance(unittest.TestCase):
@@ -198,6 +217,16 @@ class NoneAcceptance(unittest.TestCase):
         self.assertNotIn("key", result.stdout)
         self.assertNotIn("none", result.stderr)
         self.assertEqual(result.stderr, "")
+
+    def test_req_004_the_sentinel_is_the_lowercase_word_only(self):
+        for key in ("NONE", "None", "nOne"):
+            with self.subTest(key=key):
+                result = run_entry('[{"%s": 1}, {"%s": 2}]' % (key, key))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, key + "\n")
+                self.assertEqual(result.stderr, "")
+        result = run_entry('[{"NONE": 1}, {"other": 2}]')
+        self.assertEqual(result.stdout, NONE)
 
 
 class RunnerAcceptance(unittest.TestCase):
@@ -280,6 +309,23 @@ class AmbiguityAcceptance(unittest.TestCase):
         self.assertEqual(result.returncode, 0, "AMB-002 skip leaves an empty intersection")
         self.assertEqual(result.stdout, NONE)
 
+    def test_amb_001_amb_002_an_empty_object_is_an_object_but_an_empty_array_is_not(self):
+        """The two decisions meet at the element's JSON type.
+
+        An empty object is still an object, so it removes every key; an empty
+        array is not an object, so AMB-002 skips it and the other objects keep
+        their common key. An array of only empty arrays has no object at all.
+        """
+        result = run_entry('[{"a": 1}, {}]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, NONE)
+        result = run_entry('[{"a": 1}, []]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "a\n")
+        result = run_entry('[[]]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, NONE)
+
     def test_amb_003_unusable_input_is_a_clean_non_zero_stop_error(self):
         cases = {
             "invalid JSON": "{not json",
@@ -347,6 +393,23 @@ class AmbiguityAcceptance(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "", "no result lines on the error path")
         self.assertIn("cannot read", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_amb_003_a_read_error_after_open_is_a_stop_error(self):
+        """AMB-003 `unreadable` also covers a read that fails after a successful open.
+
+        /proc/self/mem opens but fails on read, so this drives the OSError
+        branch at handle.read() at the process boundary. The path is
+        Linux-specific; where it is absent the mocked-open case above still
+        covers the same branch.
+        """
+        path = "/proc/self/mem"
+        if not os.path.exists(path):
+            self.skipTest("no /proc/self/mem to provoke a read error on this platform")
+        result = run_path(path)
+        self.assertNotEqual(result.returncode, 0, "a read failure must exit non-zero")
+        self.assertEqual(result.stdout, "", "no result lines on the error path")
+        self.assertIn("cannot read", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
 
 class UnitAcceptance(unittest.TestCase):
