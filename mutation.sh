@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
-# mutation.sh -- the mutation harness the requirement document declares.
+# mutation.sh -- mutation-detection harness for the delivered summary tool.
 #
-# docs/requirements/intake.yaml declares the mutation step as:
+# Usage: bash mutation.sh
 #
-#     mutation:
-#       run:           bash mutation.sh
-#       report_path:   reports/mutation/mutation.json
-#       format:        survivors-json
-#       max_survivors: 0
+# Applies one deliberate defect at a time to summary.py, runs the delivered test
+# suite against each mutant, and writes reports/mutation/mutation.json:
 #
-# It mutates the delivered implementation (common_keys.py), runs the delivered
-# test suite (`bash run-tests.sh`) against each mutant, and writes the
-# tool-agnostic survivors-json report to reports/mutation/mutation.json. The
-# harness exits non-zero when any mutant survives, and the report is written
-# either way.
+#   {"total": <mutants measured>,
+#    "survivors": [{"file": ..., "line": ..., "description": ...}, ...]}
 #
-# The logic lives in mutation/common_keys_mutation.py (Python 3 standard
-# library only), so this needs no install step and no network access; this
-# wrapper is the declared entry point.
+# A mutant the suite still passes is a survivor (a test gap); the harness exits
+# non-zero when any survives. There is no install step and no network access:
+# the harness is Python 3 standard library only.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-exec python3 mutation/common_keys_mutation.py "$@"
+exec python3 mutation/mutation.py "$@"

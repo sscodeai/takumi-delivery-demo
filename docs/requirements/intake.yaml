@@ -1,139 +1,158 @@
 confirmation:
   by: "SS"
-  at: "2026-10-13T14:38:56.072Z"
+  at: "2026-10-27T07:40:57.879Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
-    digest: "sha256:8067ab6c79353785ff7161d3e9bef85b7994eb56a55b62102bee11eba1991551"
+    digest: "sha256:2230530f4edba0495923b82861de1a34c9b64eebb865ef3a3a4850aed506afc1"
     signedBy: "SS"
     signedAt: "2026-10-12T02:38:35Z"
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "What should the tool do when the top-level JSON array is empty (zero objects)?"
-      chosen: "none: print the single word none and exit 0, because no key is common to all zero objects"
-      class: unmechanised
+      question: "How are percentages rounded when the exact value falls on a half at the one-decimal boundary?"
+      chosen: "half-up: round half away from zero (6.25 becomes 6.3)"
+      class: derived-ratio
       policy: document-default
+      checkedAs: half-up
     - id: AMB-002
-      question: "What should the tool do with array elements that are not JSON objects (numbers, strings, null, nested arrays)?"
-      chosen: "skip: ignore the non-object element and intersect the keys of the remaining objects"
+      question: "When the suite key repeats across several rows, what does one line per suite mean?"
+      chosen: "merge: every occurrence counts, summing passed and total into one line"
       class: unmechanised
       policy: document-default
     - id: AMB-003
-      question: "What should the tool do when the input file is missing, unreadable, not valid JSON, or its top level is not an array?"
-      chosen: "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
+      question: "What happens to a row that cannot yield a percentage (non-numeric passed or total, or total of 0)?"
+      chosen: "skip-silent: skip the row, print nothing about it, still exit 0"
       class: unmechanised
       policy: document-default
 
+# Requirement intake. Built in steps: skeleton first, then requirements,
+# then ambiguities, then the deliverable contract.
 requirements:
   - id: REQ-001
-    title: "Provide the common-keys command-line entry point"
-    description: "The deliverable provides an executable script named common-keys.sh at the repository root. It is invoked as `bash common-keys.sh <path-to-json>` and takes the JSON file path as its first positional argument. It reads the JSON file and writes its result to standard output."
+    title: "Ship summary.sh as the single entry point"
+    description: "The repository must provide a shell script named summary.sh at the
+      repository root. A judge invokes it as `bash summary.sh <csv>`, where <csv> is
+      the path of a CSV file of test run records. The script takes that path from $1,
+      reads it, writes the report to stdout and exits 0 for well-formed input."
     acceptance_criteria:
-      - "Running `bash common-keys.sh <file>` on a valid JSON file whose top level is an array of objects exits with status 0."
-      - "The result is written to standard output, not stderr, and the process terminates on its own."
+      - "summary.sh exists at the repository root and `bash summary.sh <path>` runs with no install or build step."
+      - "On a well-formed CSV the command exits 0 and writes the report to stdout."
     priority: High
-    source: "Request: 'a small command-line tool that reads a JSON file'."
+    source: "Request: 'a command-line tool that reads a CSV of test run records and prints one line per suite'."
 
   - id: REQ-002
-    title: "Intersect the keys of every object in the array"
-    description: "The reported keys are exactly those key names (exact string match) that are present in every object of the top-level array. A key missing from any single object is not reported."
+    title: "Read the header row and locate the three columns by name"
+    description: "The first row of the CSV is a header naming the columns suite, passed
+      and total. The script must skip that header row and locate the three columns by
+      their header names, so a file whose columns are in a different order still
+      yields the same report."
     acceptance_criteria:
-      - "Given objects with keys {a,b}, {a,c}, {a,b}, the tool reports only 'a'."
-      - "A key present in all but one object is absent from the output."
+      - "A header row is never treated as a data row and never produces a suite line."
+      - "The same records written as `suite,passed,total` and as `total,suite,passed` produce the same report."
     priority: High
-    source: "'prints the keys that appear in every one of those objects'."
+    source: "Request: 'The CSV has a header row with columns: suite, passed, total.'"
 
   - id: REQ-003
-    title: "Print one common key per line in ascending alphabetical order"
-    description: "Each common key is printed on its own line to standard output. Lines are emitted in ascending alphabetical order, interpreted as ascending Unicode code point order of the key strings; because intersection keys are unique, no tie-breaking is needed."
+    title: "Print exactly one line per distinct suite"
+    description: "The report carries exactly one suite line for each distinct value of the
+      suite column, in order of first appearance in the input, and no other per-suite
+      text. A suite that spans several input rows is reported once (see AMB-002)."
     acceptance_criteria:
-      - "The output contains one line per common key and no other lines."
-      - "For common keys {b,a,c} the output order is a, b, c."
+      - "A fixture with three distinct suites yields exactly three suite lines."
+      - "A fixture whose single suite repeats over several rows yields exactly one suite line for it."
+      - "Suite values are echoed verbatim, without case folding or trimming."
     priority: High
-    source: "'one per line, sorted alphabetically'."
+    source: "Request: 'prints one line per suite'."
 
   - id: REQ-004
-    title: "Print the single word none when nothing is common"
-    description: "When no key is present in every object, the tool prints exactly one line containing the single lowercase word none and exits with status 0."
+    title: "Print the pass percentage with one decimal place"
+    description: "Each suite line reports the pass percentage as passed / total * 100
+      expressed in percentage points (0 to 100), rounded to one decimal place and
+      always printed with exactly one digit after the decimal point, e.g. 96.0 and
+      33.3. Rounding of exact halves follows AMB-001."
     acceptance_criteria:
-      - "For an array whose objects share no key, the complete output is the one line 'none'."
-      - "No other line, prefix or suffix is printed in that case."
+      - "passed=48, total=50 prints 96.0; passed=12, total=12 prints 100.0; passed=1, total=3 prints 33.3."
+      - "The percentage token always carries exactly one digit after the decimal point."
+      - "The percentage is in percentage points, not a 0-1 fraction."
     priority: High
-    source: "'or the single word none when no key is common to all of them'."
+    source: "Request: 'the pass percentage rounded to one decimal place'."
 
   - id: REQ-005
-    title: "Ship the tool's own test suite and its runner"
-    description: "The deliverable ships automated tests for the behaviour above, plus a runner run-tests.sh at the repository root that runs them and writes a TAP report to reports/tests.tap. `bash run-tests.sh` exits 0 only when every delivered test passes."
+    title: "Print one totals line for the whole file"
+    description: "After the suite lines the report carries exactly one totals line of the
+      form `TOTAL <tests>`, where <tests> is the sum of the total column over every
+      counted suite (the summed denominator of the printed suite lines)."
     acceptance_criteria:
-      - "`bash run-tests.sh` exits 0 and writes a readable TAP report at reports/tests.tap."
-      - "The TAP report contains no failing test point when the delivered behaviour is correct."
-    priority: Medium
-    source: "Deliverable contract in this document; the SCN-001 scenario reads this report."
+      - "The report contains exactly one line whose first token is TOTAL."
+      - "The TOTAL value equals the sum of the denominator values printed on the suite lines."
+    priority: High
+    source: "Derived from 'one line per suite' plus the whole-file reading a judge compares against."
 
   - id: REQ-006
-    title: "Ship the mutation harness"
-    description: "The deliverable ships `bash mutation.sh`, which mutates the delivered implementation, runs the delivered tests against each mutant, and writes a survivors-json report to reports/mutation/mutation.json with total and survivors entries."
+    title: "Resolve repeated suites and unusable rows as the recorded decisions say"
+    description: "Repeated suite keys are resolved the way AMB-002 decides (default:
+      merge every occurrence into one line by summing passed and total), and rows that
+      cannot yield a percentage are handled the way AMB-003 decides (default: skipped
+      silently, the run still exits 0). Neither of these two behaviours is mechanised
+      by a judge relation yet: they are reported as not mechanised."
     acceptance_criteria:
-      - "`bash mutation.sh` writes reports/mutation/mutation.json in the survivors-json shape with total and survivors keys."
-      - "The report records at least one mutant, so the mutation check is not vacuous."
+      - "Two rows for the same suite under the merge reading produce one line whose denominator is the sum of the two totals."
+      - "A row with a non-numeric passed or total, or total of 0, does not abort the run under the default and is not reported as a suite."
     priority: Medium
-    source: "Deliverable contract in this document; the REL-001 mutation-detection relation reads this report."
-
-  - id: REQ-007
-    title: "Resolve undefined input edges as the recorded decisions say"
-    description: "The behaviour for an empty array, for array elements that are not JSON objects, and for a missing, unreadable, non-JSON, or non-array input is exactly what AMB-001, AMB-002 and AMB-003 decide. No automated judge in this document checks these behaviours yet."
-    acceptance_criteria:
-      - "The chosen empty-array behaviour matches AMB-001."
-      - "The chosen non-object-element behaviour matches AMB-002."
-      - "The chosen invalid-input behaviour matches AMB-003."
-    priority: Medium
-    source: "The request does not state edge-case behaviour; recorded as decisions."
-
+    source: "Open decisions raised by the request; see AMB-002 and AMB-003."
 ambiguities:
   - id: AMB-001
-    question: "What should the tool do when the top-level JSON array is empty (zero objects)?"
+    question: "How are percentages rounded when the exact value falls on a half at the one-decimal boundary?"
     options:
-      - "none: print the single word none and exit 0, because no key is common to all zero objects"
-      - "error: exit non-zero with a diagnostic, because an empty array is not a meaningful query"
-    default: "none: print the single word none and exit 0, because no key is common to all zero objects"
-    blocking: false
+      - "half-up: round half away from zero (6.25 becomes 6.3)"
+      - "truncate: drop the remainder (6.25 becomes 6.2)"
+    default: "half-up: round half away from zero (6.25 becomes 6.3)"
+    checkedAs: half-up
+    blocking: true
 
-    chosen: "none: print the single word none and exit 0, because no key is common to all zero objects"
+    chosen: "half-up: round half away from zero (6.25 becomes 6.3)"
   - id: AMB-002
-    question: "What should the tool do with array elements that are not JSON objects (numbers, strings, null, nested arrays)?"
+    question: "When the suite key repeats across several rows, what does one line per suite mean?"
     options:
-      - "skip: ignore the non-object element and intersect the keys of the remaining objects"
-      - "error: exit non-zero with a diagnostic naming the offending element"
-    default: "skip: ignore the non-object element and intersect the keys of the remaining objects"
+      - "merge: every occurrence counts, summing passed and total into one line"
+      - "last-row: only the last occurrence of the suite is kept"
+      - "error: a repeated suite aborts the run with a non-zero exit"
+    default: "merge: every occurrence counts, summing passed and total into one line"
     blocking: false
 
-    chosen: "skip: ignore the non-object element and intersect the keys of the remaining objects"
+    chosen: "merge: every occurrence counts, summing passed and total into one line"
   - id: AMB-003
-    question: "What should the tool do when the input file is missing, unreadable, not valid JSON, or its top level is not an array?"
+    question: "What happens to a row that cannot yield a percentage (non-numeric passed or total, or total of 0)?"
     options:
-      - "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
-      - "none: print none and exit 0, treating unusable input as an empty intersection"
-    default: "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
+      - "skip-silent: skip the row, print nothing about it, still exit 0"
+      - "skip-count: skip the row, still exit 0, and print a SKIPPED line counting it"
+      - "stop-error: abort the run with a non-zero exit and a message on stderr"
+    default: "skip-silent: skip the row, print nothing about it, still exit 0"
     blocking: false
 
-    chosen: "error: exit non-zero and print a diagnostic to stderr, producing no result lines"
+    chosen: "skip-silent: skip the row, print nothing about it, still exit 0"
 deliverable:
-  run: "bash common-keys.sh {json}"
+  run: "bash summary.sh {csv}"
   timeoutMs: 30000
-  scenarios:
-    - id: SCN-001
-      run: "bash run-tests.sh"
-      expect: "the delivered test suite passes and asserts the common-key intersection, its alphabetical ordering, and the none case"
-      report: tap
-      report_path: "reports/tests.tap"
+  input_format:
+    columns: "suite:id,passed:measure,total:other"
+    sample: |
+      auth-service,48,50
+      billing,12,12
+      search,7,9
+      auth-service,2,4
+  output_format:
+    suite_line:
+      shape: "<suite> <passed> <total> <percentage>"
+      fields: [id, numerator, denominator, ratio]
+    total_line:
+      shape: "TOTAL <tests>"
+      fields: [sum]
   relations:
     - id: REL-001
-      relation: mutation-detection
-      description: "The delivered tests fail when the delivered common-key behaviour is mutated, as read from the declared mutation report."
-  mutation:
-    run: "bash mutation.sh"
-    report_path: "reports/mutation/mutation.json"
-    format: survivors-json
-    max_survivors: 0
-    timeoutMs: 900000
+      relation: derived-ratio
+      decides: AMB-001
+      description: "Each printed percentage equals the line's own passed divided by its own
+        total times 100, rounded to one decimal the way AMB-001 decided."
+
