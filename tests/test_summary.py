@@ -291,6 +291,22 @@ def req_002_a_quoted_comma_region_is_one_record():
     )
 
 
+def req_002_a_quoted_region_with_an_escaped_quote_is_one_record():
+    # RFC 4180 doubles the quote inside a quoted field. The record is one row
+    # whose region is `North "East"`, not two records and not a skipped row.
+    expect(
+        'region,amount\n"North ""East""",100.00\n',
+        ['North "East" 1 100.00 100.00', "TOTAL 1 100.00", "SKIPPED 0"],
+    )
+
+
+def req_002_a_quoted_region_is_trimmed_after_quoting():
+    expect(
+        'region,amount\n" North, East ",100.00\n',
+        ["North, East 1 100.00 100.00", "TOTAL 1 100.00", "SKIPPED 0"],
+    )
+
+
 def req_002_crlf_line_endings_are_accepted():
     expect(
         "region,amount\r\nnorth,1.00\r\nsouth,2.00\r\n",
@@ -545,6 +561,20 @@ def req_007_negative_halves_round_away_from_zero():
     assert out[0] == "x 1 -1.01 -1.01", out
 
 
+def req_007_cancelling_amounts_do_not_print_a_negative_zero():
+    expect(
+        "region,amount\nx,1.00\nx,-1.00\n",
+        ["x 2 0.00 0.00", "TOTAL 2 0.00", "SKIPPED 0"],
+    )
+
+
+def req_007_sub_cent_amounts_round_to_zero():
+    expect(
+        "region,amount\nx,0.004\ny,-0.004\n",
+        ["x 1 0.00 0.00", "y 1 0.00 0.00", "TOTAL 2 0.00", "SKIPPED 0"],
+    )
+
+
 def req_007_repeated_runs_are_byte_identical():
     path = csv_file(SAMPLE)
     first = run([path])
@@ -639,6 +669,19 @@ def req_005_amount_with_a_surrounding_blank_is_malformed():
 
 def req_005_a_quoted_empty_amount_is_malformed():
     expect('region,amount\nnorth,""\n', ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
+def req_005_a_quoted_blank_region_is_malformed():
+    # The region is empty after trimming, which REQ-005 defines as malformed
+    # regardless of RFC 4180 quoting.
+    expect('region,amount\n"   ",5.00\n', ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
+def req_005_a_very_long_malformed_field_is_counted_not_crashed():
+    # A field longer than the csv module's default limit must still be a
+    # malformed row (AMB-001), not a crash or a header/data corruption.
+    huge = "a" * 200000
+    expect("region,amount\nnorth,%s\n" % huge, ["TOTAL 0 0.00", "SKIPPED 1"])
 
 
 def req_005_a_comma_only_row_is_malformed():
@@ -800,6 +843,8 @@ TESTS = [
     ("req_002_a_wrong_header_is_fatal", req_002_a_wrong_header_is_fatal),
     ("req_002_header_only_file_is_an_empty_report", req_002_header_only_file_is_an_empty_report),
     ("req_002_a_quoted_comma_region_is_one_record", req_002_a_quoted_comma_region_is_one_record),
+    ("req_002_a_quoted_region_with_an_escaped_quote_is_one_record", req_002_a_quoted_region_with_an_escaped_quote_is_one_record),
+    ("req_002_a_quoted_region_is_trimmed_after_quoting", req_002_a_quoted_region_is_trimmed_after_quoting),
     ("req_002_crlf_line_endings_are_accepted", req_002_crlf_line_endings_are_accepted),
     ("req_002_utf8_bom_before_the_header_is_ignored", req_002_utf8_bom_before_the_header_is_ignored),
     ("req_002_a_missing_final_newline_is_accepted", req_002_a_missing_final_newline_is_accepted),
@@ -834,6 +879,8 @@ TESTS = [
     ("req_007_trailing_zeros_are_always_printed", req_007_trailing_zeros_are_always_printed),
     ("req_007_half_up_at_the_second_decimal", req_007_half_up_at_the_second_decimal),
     ("req_007_negative_halves_round_away_from_zero", req_007_negative_halves_round_away_from_zero),
+    ("req_007_cancelling_amounts_do_not_print_a_negative_zero", req_007_cancelling_amounts_do_not_print_a_negative_zero),
+    ("req_007_sub_cent_amounts_round_to_zero", req_007_sub_cent_amounts_round_to_zero),
     ("req_007_repeated_runs_are_byte_identical", req_007_repeated_runs_are_byte_identical),
     ("req_008_zero_and_negative_amounts_are_included", req_008_zero_and_negative_amounts_are_included),
     ("req_008_zero_amount_counts", req_008_zero_amount_counts),
@@ -848,6 +895,8 @@ TESTS = [
     ("req_004_total_line_precedes_the_skipped_line", req_004_total_line_precedes_the_skipped_line),
     ("req_005_amount_with_a_surrounding_blank_is_malformed", req_005_amount_with_a_surrounding_blank_is_malformed),
     ("req_005_a_quoted_empty_amount_is_malformed", req_005_a_quoted_empty_amount_is_malformed),
+    ("req_005_a_quoted_blank_region_is_malformed", req_005_a_quoted_blank_region_is_malformed),
+    ("req_005_a_very_long_malformed_field_is_counted_not_crashed", req_005_a_very_long_malformed_field_is_counted_not_crashed),
     ("req_005_a_comma_only_row_is_malformed", req_005_a_comma_only_row_is_malformed),
     ("req_006_repeated_rows_with_negative_amounts_each_count", req_006_repeated_rows_with_negative_amounts_each_count),
     ("req_007_mean_uses_the_exact_sum", req_007_mean_uses_the_exact_sum),
