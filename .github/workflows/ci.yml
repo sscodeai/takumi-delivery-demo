@@ -42,3 +42,15 @@ jobs:
             fi
             exit "$rc"
           }
+      - name: assert the delivered report matches the declared shape
+        run: |
+          expected='east 1 45.25 45.25
+          north 2 220.00 110.00
+          south 1 80.00 80.00
+          TOTAL 4 345.25
+          SKIPPED 0'
+          actual="$(bash summary.sh takumi-sample.csv)"
+          if [ "$actual" != "$expected" ]; then
+            printf 'unexpected report:\n%s\n' "$actual" >&2
+            exit 1
+          fi

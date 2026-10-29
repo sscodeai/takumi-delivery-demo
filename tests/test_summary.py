@@ -474,6 +474,12 @@ def req_005_all_rows_malformed_still_exits_zero():
     ]
 
 
+def req_005_an_unclosed_quote_row_is_malformed():
+    # RFC 4180 requires the closing quote; the row is unparsable, so AMB-001
+    # skips and counts it rather than reading 100.00 as a valid amount.
+    expect('region,amount\nnorth,"100.00', ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
 def req_005_malformed_rows_do_not_change_any_aggregate():
     clean = report("region,amount\nnorth,10.00\nsouth,20.00\n")
     dirty = report(
@@ -818,6 +824,7 @@ TESTS = [
     ("req_005_clean_file_prints_skipped_zero", req_005_clean_file_prints_skipped_zero),
     ("req_005_skipped_line_is_last_and_appears_once", req_005_skipped_line_is_last_and_appears_once),
     ("req_005_all_rows_malformed_still_exits_zero", req_005_all_rows_malformed_still_exits_zero),
+    ("req_005_an_unclosed_quote_row_is_malformed", req_005_an_unclosed_quote_row_is_malformed),
     ("req_005_malformed_rows_do_not_change_any_aggregate", req_005_malformed_rows_do_not_change_any_aggregate),
     ("req_006_identical_rows_each_count", req_006_identical_rows_each_count),
     ("req_006_three_identical_rows_each_count", req_006_three_identical_rows_each_count),

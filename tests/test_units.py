@@ -270,7 +270,7 @@ def unit_read_records_turns_a_csv_error_into_a_malformed_record():
 
     original = summary.csv.reader
     try:
-        summary.csv.reader = lambda handle: BrokenReader()
+        summary.csv.reader = lambda handle, **kwargs: BrokenReader()
         records = list(summary.read_records(io.StringIO("")))
     finally:
         summary.csv.reader = original
@@ -417,6 +417,15 @@ def unit_read_records_yields_nothing_for_an_empty_handle():
     assert list(summary.read_records(io.StringIO(""))) == []
 
 
+def unit_read_records_turns_an_unclosed_quote_into_a_malformed_record():
+    # RFC 4180 requires the closing quote, so this is one unparsable data row
+    # (AMB-001), not an amount that happens to be "100.00".
+    records = list(summary.read_records(io.StringIO('region,amount\nnorth,"100.00')))
+    assert records[0] == ["region", "amount"]
+    assert records[1] is summary.MALFORMED
+    assert len(records) == 2, records
+
+
 UNIT_TESTS = [
     ("unit_locate_header_accepts_the_declared_header", unit_locate_header_accepts_the_declared_header),
     ("unit_locate_header_trims_blanks_and_ignores_case", unit_locate_header_trims_blanks_and_ignores_case),
@@ -443,6 +452,7 @@ UNIT_TESTS = [
     ("unit_summarise_mean_uses_the_exact_sum", unit_summarise_mean_uses_the_exact_sum),
     ("unit_summarise_accepts_zero_and_negative_amounts", unit_summarise_accepts_zero_and_negative_amounts),
     ("unit_read_records_yields_nothing_for_an_empty_handle", unit_read_records_yields_nothing_for_an_empty_handle),
+    ("unit_read_records_turns_an_unclosed_quote_into_a_malformed_record", unit_read_records_turns_an_unclosed_quote_into_a_malformed_record),
     ("unit_summarise_groups_sorts_and_prints_the_sample", unit_summarise_groups_sorts_and_prints_the_sample),
     ("unit_summarise_keeps_every_duplicate_row", unit_summarise_keeps_every_duplicate_row),
     ("unit_summarise_counts_malformed_rows_without_aggregating_them", unit_summarise_counts_malformed_rows_without_aggregating_them),
