@@ -316,6 +316,27 @@ def unit_main_stops_on_a_missing_or_wrong_header():
         assert err.getvalue().strip(), "a diagnostic on stderr is expected"
 
 
+def unit_main_stops_on_a_permission_denied_input():
+    # REQ-001: a file that exists but cannot be read is a stop error, like a
+    # missing file. chmod is unreliable under a root test runner, so raise the
+    # operating-system error that open() would raise instead.
+    path = os.path.join(tempfile.gettempdir(), "summary-unreadable.csv")
+    out, err = io.StringIO(), io.StringIO()
+
+    def denied(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", path)
+
+    summary.open = denied
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            status = summary.main(["summary.py", path])
+    finally:
+        del summary.open
+    assert status == 1, status
+    assert out.getvalue() == "", out.getvalue()
+    assert "cannot read" in err.getvalue(), err.getvalue()
+
+
 def unit_main_writes_the_report_to_stdout():
     with tempfile.TemporaryDirectory(prefix="summary-unit-") as directory:
         path = os.path.join(directory, "input.csv")
@@ -431,6 +452,7 @@ UNIT_TESTS = [
     ("unit_read_records_turns_a_csv_error_into_a_malformed_record", unit_read_records_turns_a_csv_error_into_a_malformed_record),
     ("unit_main_rejects_a_wrong_argument_count", unit_main_rejects_a_wrong_argument_count),
     ("unit_main_stops_on_unreadable_input", unit_main_stops_on_unreadable_input),
+    ("unit_main_stops_on_a_permission_denied_input", unit_main_stops_on_a_permission_denied_input),
     ("unit_main_stops_on_a_missing_or_wrong_header", unit_main_stops_on_a_missing_or_wrong_header),
     ("unit_main_writes_the_report_to_stdout", unit_main_writes_the_report_to_stdout),
 ]

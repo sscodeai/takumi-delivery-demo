@@ -675,6 +675,98 @@ def req_009_three_permutations_give_the_same_report():
     assert len(reports) == 1, reports
 
 
+# --- independent recomputation (DIFF-001) ------------------------------------
+
+
+def req_003_printed_aggregates_match_an_independent_recomputation():
+    # DIFF-001: rebuild every region's count, sum and mean from the fixture
+    # rows with decimal.Decimal, independently of summary.py's Fraction
+    # arithmetic, and compare against what the tool printed (REQ-003).
+    from decimal import Decimal, ROUND_HALF_UP
+
+    rows = [
+        ("north", "120.50"),
+        ("north", "99.50"),
+        ("south", "80.00"),
+        ("east", "45.25"),
+        ("North", "10.00"),
+        ("east", "-10.00"),
+        ("east", "30.00"),
+        ("north", "0.005"),
+    ]
+    malformed = ["north,abc", "short", "   ,1.00", "ok,1e3"]
+    text = (
+        "region,amount\n"
+        + "\n".join("%s,%s" % row for row in rows)
+        + "\n"
+        + "\n".join(malformed)
+        + "\n"
+    )
+
+    expected = {}
+    for region, amount in rows:
+        count, total = expected.get(region, (0, Decimal(0)))
+        expected[region] = (count + 1, total + Decimal(amount))
+
+    want = []
+    for region in sorted(expected, key=lambda name: name.encode("utf-8")):
+        count, total = expected[region]
+        mean = total / count
+        want.append(
+            "%s %d %s %s"
+            % (
+                region,
+                count,
+                total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                mean.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            )
+        )
+
+    out = report(text)
+    printed = region_lines("\n".join(out))
+    assert printed == want, (printed, want)
+    assert out[-1] == "SKIPPED %d" % len(malformed), out
+
+
+def req_004_printed_region_sums_add_up_to_the_total_line():
+    # REL-003 / REQ-004: adding the printed per-region counts and sums must
+    # reproduce the printed TOTAL line (every amount here is exact at 2dp, so
+    # no rounding slack is needed).
+    from decimal import Decimal
+
+    out = report(
+        "region,amount\n"
+        "north,120.50\n"
+        "south,80.00\n"
+        "north,99.50\n"
+        "east,45.25\n"
+        "east,-10.00\n"
+        "North,10.00\n"
+        "bad,abc\n"
+    )
+    groups = region_lines("\n".join(out))
+    total = TOTAL_LINE.match(out[-2])
+    assert total, out
+    printed_sum = sum((Decimal(fields_of(line)[2]) for line in groups), Decimal(0))
+    printed_count = sum(int(fields_of(line)[1]) for line in groups)
+    assert Decimal(total.group(2)) == printed_sum, (out, printed_sum)
+    assert int(total.group(1)) == printed_count, out
+
+
+def req_009_all_permutations_of_a_small_fixture_are_identical():
+    # REL-004 / REQ-009: every ordering of the same multiset, malformed row
+    # included, must produce byte-identical stdout.
+    from itertools import permutations
+
+    rows = ["north,1.00", "south,2.00", "north,3.00", "bad,abc"]
+    expected = None
+    for order in permutations(rows):
+        printed = tuple(report("region,amount\n" + "\n".join(order) + "\n"))
+        if expected is None:
+            expected = printed
+        assert printed == expected, (order, printed, expected)
+
+
 # --- the suite ---------------------------------------------------------------
 
 
@@ -756,6 +848,9 @@ TESTS = [
     ("req_007_a_large_amount_keeps_its_cents_exact", req_007_a_large_amount_keeps_its_cents_exact),
     ("req_008_a_negative_mean_keeps_its_sign", req_008_a_negative_mean_keeps_its_sign),
     ("req_009_three_permutations_give_the_same_report", req_009_three_permutations_give_the_same_report),
+    ("req_003_printed_aggregates_match_an_independent_recomputation", req_003_printed_aggregates_match_an_independent_recomputation),
+    ("req_004_printed_region_sums_add_up_to_the_total_line", req_004_printed_region_sums_add_up_to_the_total_line),
+    ("req_009_all_permutations_of_a_small_fixture_are_identical", req_009_all_permutations_of_a_small_fixture_are_identical),
 ] + UNIT_TESTS
 
 
