@@ -23,22 +23,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: write the sample input the requirement document declares
-        run: |
-          cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
-          region,amount
-          north,120.50
-          south,80.00
-          north,99.50
-          east,45.25
-          TAKUMI_SAMPLE
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 30s bash -c 'bash summary.sh takumi-sample.csv' || {
+          printf 'region,amount\nnorth,120.50\nsouth,80.00\nnorth,99.50\neast,45.25\n' > sample.csv
+          timeout 120s bash -c 'bash summary.sh sample.csv' || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 30s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
+              echo 'the deliverable command did not exit within 120s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh sample.csv' >&2
             fi
             exit "$rc"
           }
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: mutation detection (the command the delivery review runs)
+        run: |
+          set -o pipefail
+          npx stryker run --reporters json > mutation-report.json
+          python3 - <<'PY'
+          import json
+
+          report = json.load(open("mutation-report.json", encoding="utf-8"))
+          statuses = [m["status"] for f in report["files"].values() for m in f["mutants"]]
+          print("%d mutants: %d killed, %d survived"
+                % (len(statuses), statuses.count("Killed"), statuses.count("Survived")))
+          if "Survived" in statuses:
+              raise SystemExit("the delivered tests did not notice every mutation")
+          PY

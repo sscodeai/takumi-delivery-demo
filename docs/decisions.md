@@ -19,6 +19,17 @@ mechanise them.
 
 | id | question (one line) | answer | provenance | anchored at |
 | --- | --- | --- | --- | --- |
-| AMB-001 | What should the tool do with a data row it cannot parse (wrong field count, empty region, non-numeric amount)? | `skip-count`: skip the row, exclude it from every aggregate, and report it on a `SKIPPED` line | DEFAULTED (`default:`) — mechanised by REL-001 | `summary.py:151` (rule comment), `summary.py:154` (`skipped += 1`), `summary.py:184` (the `SKIPPED` line); malformed definition at `summary.py:83`, `summary.py:86`, `summary.py:88`; tests `tests/test_units.py:159`, `tests/test_summary.py:436` |
-| AMB-002 | When two data rows are identical (same region and same amount), how are they treated? | `merge`: every occurrence counts as its own order | DEFAULTED (`default:`) — mechanised by REL-002 | `summary.py:161` (rule comment), `summary.py:164` (row count grows), `summary.py:165` (sum adds each amount); tests `tests/test_units.py:199`, `tests/test_summary.py:494` |
-| AMB-003 | How are printed sums and means rounded to two decimal places? | `half-up`: round half away from zero | DEFAULTED (`default:`) — mechanised by DIFF-001 | `summary.py:106` (rule comment), `summary.py:109` (the `>=` that sends an exact half up), `summary.py:113` (exactly two printed decimals); tests `tests/test_units.py:109`, `tests/test_summary.py:531` |
+| AMB-001 | What should the tool do with a data row it cannot parse (wrong field count, empty region, non-numeric amount)? | `skip-count`: skip the row, exclude it from every aggregate, and report it on a `SKIPPED` line | DEFAULTED (`default:`) — mechanised by REL-001 | `summary.py:154` (rule comment), `summary.py:157` (`skipped += 1`), `summary.py:187` (the `SKIPPED` line); malformed definition at `summary.py:83`, `summary.py:86`, `summary.py:88`; RFC 4180 failures become malformed rows at `summary.py:125`; mutation that must be noticed: `mutation/mutation.py:93`; tests `tests/test_units.py:168`, `tests/test_units.py:444`, `tests/test_summary.py:460`, `tests/test_summary.py:513` |
+| AMB-002 | When two data rows are identical (same region and same amount), how are they treated? | `merge`: every occurrence counts as its own order | DEFAULTED (`default:`) — mechanised by REL-002 | `summary.py:164` (rule comment), `summary.py:167` (row count grows), `summary.py:168` (sum adds each amount); mutations that must be noticed: `mutation/mutation.py:134`, `mutation/mutation.py:140`; tests `tests/test_units.py:208`, `tests/test_summary.py:530` |
+| AMB-003 | How are printed sums and means rounded to two decimal places? | `half-up`: round half away from zero | DEFAULTED (`default:`) — mechanised by DIFF-001 | `summary.py:106` (rule comment), `summary.py:109` (the `>=` that sends an exact half up), `summary.py:113` (exactly two printed decimals); mutation that must be noticed: `mutation/mutation.py:62`; tests `tests/test_units.py:109`, `tests/test_summary.py:567` |
+
+## Where the declared relations are checked
+
+| relation | checked by |
+| --- | --- |
+| REL-001 malformed-row-accounting (AMB-001) | `tests/test_summary.py` `req_005_*` (dirty fixture vs. clean twin: aggregates identical, only `SKIPPED` grows) |
+| REL-002 duplicate-resolution (AMB-002) | `tests/test_summary.py` `req_006_*` (identical rows grow count and sum) |
+| REL-003 additivity | `tests/test_summary.py` `req_004_total_*` (printed region counts/sums sum to the printed `TOTAL`) |
+| REL-004 row-order-invariance | `tests/test_summary.py` `req_009_*` (shuffles and permutations compared byte-for-byte) |
+| DIFF-001 independent-aggregation (AMB-003) | `req_003_printed_aggregates_match_an_independent_recomputation`, `req_004_total_sum_is_the_sum_of_the_accepted_amounts`, `req_007_*` |
+| mutation-detection | `npx stryker run --reporters json` → `node_modules/.bin/stryker` → `mutation/mutation.py` (real mutants on `summary.py`, real `bash run-tests.sh` runs; exit non-zero on a survivor) |

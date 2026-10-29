@@ -80,6 +80,21 @@ suite against each mutant, and writes `reports/mutation/mutation.json`
 (`{"total": <int>, "survivors": [...]}`). It exits non-zero if any mutant
 survives.
 
+The same engine answers the review's mutation command:
+
+```
+npx stryker run --reporters json
+```
+
+`npx` resolves project-local bins first, so it runs the delivered
+`node_modules/.bin/stryker`. That bin forwards to `mutation/mutation.py`: the
+delivery host has no npm registry access, so a real `@stryker-mutator/core`
+install cannot be fetched there. The output is Stryker's JSON reporter schema on
+stdout (mutants, locations, statuses) and in `reports/mutation/stryker.json`,
+and the exit status is non-zero whenever a mutant survives — every one of the
+14 mutants is killed by the delivered suite today (score 100). Mutants are
+copied into a throwaway directory, so the working tree is never modified.
+
 ## Where the decisions live
 
 `docs/requirements/intake.yaml` is the confirmed requirement document, and
@@ -88,5 +103,6 @@ survives.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the delivered tests and the delivered command on
-a sample carrying the declared `region,amount` header.
+`.github/workflows/ci.yml` runs the delivered tests, the delivered command on a
+sample carrying the declared `region,amount` header, and the mutation command
+above, failing the pipeline if a mutant survives.

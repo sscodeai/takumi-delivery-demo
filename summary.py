@@ -119,7 +119,10 @@ def read_records(handle):
     A single pathological record must not abort the run: it is a malformed row,
     so the caller skips it and counts it (AMB-001).
     """
-    reader = csv.reader(handle)
+    # strict=True makes RFC 4180 violations (an unclosed quote, text after a
+    # closing quote) a csv.Error, so they become malformed rows under AMB-001
+    # instead of being silently accepted as data.
+    reader = csv.reader(handle, strict=True)
     while True:
         try:
             yield next(reader)

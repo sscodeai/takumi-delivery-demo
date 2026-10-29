@@ -137,6 +137,15 @@ def unit_format_money_never_prints_a_negative_zero():
     assert summary.format_money(Fraction(-1, 1000)) == "0.00"
 
 
+def unit_format_money_rounds_sub_cent_values_to_zero():
+    # REQ-007 / AMB-003: values below half a cent round to 0.00, and values at
+    # exactly half a cent round away from zero, never to a negative zero.
+    assert summary.format_money(Fraction("0.004")) == "0.00"
+    assert summary.format_money(Fraction("-0.004")) == "0.00"
+    assert summary.format_money(Fraction("0.005")) == "0.01"
+    assert summary.format_money(Fraction("-0.005")) == "-0.01"
+
+
 # --- REQ-003 / REQ-005: a row is accepted or malformed -----------------------
 
 
@@ -270,7 +279,7 @@ def unit_read_records_turns_a_csv_error_into_a_malformed_record():
 
     original = summary.csv.reader
     try:
-        summary.csv.reader = lambda handle: BrokenReader()
+        summary.csv.reader = lambda handle, **kwargs: BrokenReader()
         records = list(summary.read_records(io.StringIO("")))
     finally:
         summary.csv.reader = original
@@ -413,8 +422,32 @@ def unit_summarise_accepts_zero_and_negative_amounts():
     ]
 
 
+def unit_summarise_never_prints_a_negative_zero():
+    # REQ-007: amounts that cancel must print 0.00, not -0.00, in both the
+    # region line and the totals line.
+    records = [
+        ["region", "amount"],
+        ["x", "1.00"],
+        ["x", "-1.00"],
+    ]
+    assert summary.summarise(records) == [
+        "x 2 0.00 0.00",
+        "TOTAL 2 0.00",
+        "SKIPPED 0",
+    ]
+
+
 def unit_read_records_yields_nothing_for_an_empty_handle():
     assert list(summary.read_records(io.StringIO(""))) == []
+
+
+def unit_read_records_turns_an_unclosed_quote_into_a_malformed_record():
+    # RFC 4180 requires the closing quote, so this is one unparsable data row
+    # (AMB-001), not an amount that happens to be "100.00".
+    records = list(summary.read_records(io.StringIO('region,amount\nnorth,"100.00')))
+    assert records[0] == ["region", "amount"]
+    assert records[1] is summary.MALFORMED
+    assert len(records) == 2, records
 
 
 UNIT_TESTS = [
@@ -430,6 +463,7 @@ UNIT_TESTS = [
     ("unit_format_money_truncates_below_a_half", unit_format_money_truncates_below_a_half),
     ("unit_format_money_always_prints_two_decimals", unit_format_money_always_prints_two_decimals),
     ("unit_format_money_never_prints_a_negative_zero", unit_format_money_never_prints_a_negative_zero),
+    ("unit_format_money_rounds_sub_cent_values_to_zero", unit_format_money_rounds_sub_cent_values_to_zero),
     ("unit_parse_row_accepts_a_region_and_plain_amount", unit_parse_row_accepts_a_region_and_plain_amount),
     ("unit_parse_row_trims_the_region", unit_parse_row_trims_the_region),
     ("unit_parse_row_keeps_region_case_and_inner_spaces", unit_parse_row_keeps_region_case_and_inner_spaces),
@@ -442,7 +476,9 @@ UNIT_TESTS = [
     ("unit_summarise_prints_total_then_skipped", unit_summarise_prints_total_then_skipped),
     ("unit_summarise_mean_uses_the_exact_sum", unit_summarise_mean_uses_the_exact_sum),
     ("unit_summarise_accepts_zero_and_negative_amounts", unit_summarise_accepts_zero_and_negative_amounts),
+    ("unit_summarise_never_prints_a_negative_zero", unit_summarise_never_prints_a_negative_zero),
     ("unit_read_records_yields_nothing_for_an_empty_handle", unit_read_records_yields_nothing_for_an_empty_handle),
+    ("unit_read_records_turns_an_unclosed_quote_into_a_malformed_record", unit_read_records_turns_an_unclosed_quote_into_a_malformed_record),
     ("unit_summarise_groups_sorts_and_prints_the_sample", unit_summarise_groups_sorts_and_prints_the_sample),
     ("unit_summarise_keeps_every_duplicate_row", unit_summarise_keeps_every_duplicate_row),
     ("unit_summarise_counts_malformed_rows_without_aggregating_them", unit_summarise_counts_malformed_rows_without_aggregating_them),
