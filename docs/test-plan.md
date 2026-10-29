@@ -23,50 +23,45 @@ list so a single report and a single exit status cover the whole suite.
 
 | Requirement | Acceptance criterion | Checks |
 | --- | --- | --- |
-| REQ-001 | `summary.sh` exists at the root and runs with no install/build step | `req_001_entry_point_exists`, `req_001_entry_point_is_executable_with_shebang`, `req_001_runs_without_an_install_or_build_step`, `req_001_runs_from_another_working_directory`, `req_001_relative_input_path_resolves_from_cwd`, `req_001_input_path_may_contain_spaces` |
-| REQ-001 | A well-formed CSV exits 0 and writes the report to stdout | `req_001_valid_csv_exits_zero`, `req_001_report_goes_to_stdout_not_stderr`, `req_001_process_terminates_on_its_own`, `req_001_stdin_is_not_consulted`, `unit_main_writes_the_report_to_stdout` |
-| REQ-002 | The header row never becomes a data row or a suite line | `req_002_header_row_is_not_a_data_row`, `req_002_a_data_row_is_not_mistaken_for_a_header`, `req_002_header_only_file_reports_an_empty_total`, `unit_locate_columns_treats_a_data_row_as_data` |
-| REQ-002 | `suite,passed,total` and `total,suite,passed` give the same report | `req_002_declared_column_order_is_the_report`, `req_002_reordered_columns_yield_the_same_report`, `req_002_reordered_header_still_merges_a_repeated_suite`, `req_002_extra_columns_anywhere_do_not_disturb_the_lookup`, `unit_locate_columns_follows_a_reordered_header` |
-| REQ-003 | Three distinct suites yield exactly three suite lines | `req_003_three_distinct_suites_yield_three_lines`, `req_003_the_report_has_no_other_lines`, `req_003_each_suite_line_carries_four_fields`, `req_003_suite_lines_are_emitted_before_the_total` |
-| REQ-003 | A repeated suite yields exactly one line for it | `req_003_a_repeated_suite_yields_one_line`, `amb_002_merge_still_prints_one_line`, `unit_summarise_merges_a_repeated_suite` |
-| REQ-003 | Suite values are echoed verbatim (no case folding or trimming) | `req_003_suite_names_are_not_case_folded`, `req_003_suite_names_are_echoed_verbatim`, `req_003_suite_ids_are_not_trimmed`, `req_003_non_ascii_suite_names_survive`, `req_003_a_quoted_comma_stays_one_suite_line`, `unit_parse_row_does_not_trim_the_suite_id` |
-| REQ-003 | Order is first appearance in the input | `req_003_suites_are_in_first_appearance_order`, `amb_002_merge_keeps_first_appearance_order`, `unit_summarise_keeps_first_appearance_order` |
-| REQ-004 | `48/50` prints `96.0`, `12/12` prints `100.0`, `1/3` prints `33.3` | `req_004_declared_examples`, `amb_001_exact_half_rounds_up`, `unit_percentage_uses_points_and_half_up` |
-| REQ-004 | The percentage token always has exactly one decimal digit | `req_004_percentage_always_has_exactly_one_decimal`, `req_004_percentage_grid_matches_half_up`, `unit_render_tenths_always_prints_one_decimal` |
-| REQ-004 | The value is a percentage point value, not a 0-1 fraction | `req_004_percentage_is_in_points_not_a_fraction`, `unit_percentage_uses_points_and_half_up` |
-| REQ-004 | Zero, full, thirds, large and decimal counts follow the same rule | `req_004_zero_percent_is_zero_point_zero`, `req_004_a_full_pass_is_one_hundred`, `req_004_thirds_round_to_one_decimal`, `req_004_large_counts_keep_the_exact_ratio`, `req_004_decimal_counts_are_exact` |
-| REQ-005 | Exactly one line starts with `TOTAL` and it is last | `req_005_there_is_exactly_one_total_line`, `req_005_total_is_the_last_line`, `req_003_the_report_has_no_other_lines` |
-| REQ-005 | `TOTAL` equals the sum of printed denominators | `req_005_total_is_the_sum_of_printed_denominators`, `req_005_single_suite_total`, `req_005_header_only_file_total_is_zero`, `req_005_total_sums_every_occurrence_of_a_merged_suite`, `req_005_total_sums_denominators_across_suites`, `req_005_total_keeps_decimal_denominators`, `req_004_percentage_grid_matches_half_up`, `unit_summarise_totals_decimal_denominators` |
-| REQ-006 | Repeated suites merge by summing passed and total (AMB-002) | `amb_002_merge_sums_passed_and_total`, `amb_002_merge_percentage_uses_the_summed_counts`, `amb_002_merge_is_not_the_last_row`, `amb_002_merge_is_not_the_first_row`, `amb_002_merge_over_three_occurrences`, `unit_summarise_merges_a_repeated_suite` |
-| REQ-006 | An unusable row neither aborts the run nor prints a suite line (AMB-003) | `amb_003_non_numeric_passed_row_is_skipped`, `amb_003_non_numeric_total_row_is_skipped`, `amb_003_empty_count_cells_are_skipped`, `amb_003_quoted_non_numeric_counts_are_skipped`, `amb_003_zero_total_row_is_skipped`, `amb_003_zero_total_written_as_a_decimal_is_skipped`, `amb_003_short_row_is_skipped`, `amb_003_blank_line_is_skipped`, `amb_003_blank_suite_id_is_skipped`, `amb_003_negative_counts_are_skipped`, `amb_003_skipped_rows_do_not_change_any_aggregate`, `amb_003_a_suite_with_only_bad_rows_is_absent`, `amb_003_all_rows_bad_still_exits_zero_with_total_zero`, `amb_003_no_skipped_counter_is_printed`, `unit_parse_row_skips_every_unusable_row`, `unit_summarise_skips_unusable_rows_without_a_counter`, `unit_read_records_turns_a_csv_error_into_a_skipped_record` |
+| REQ-001 | `summary.sh` runs with no install/build step, from any cwd and with spaces in the path | `req_001_entry_point_exists`, `req_001_entry_point_is_executable_with_shebang`, `req_001_runs_without_an_install_or_build_step`, `req_001_runs_from_another_working_directory`, `req_001_relative_input_path_resolves_from_cwd`, `req_001_input_path_may_contain_spaces` |
+| REQ-001 | A readable file exits 0 and the report goes to stdout | `req_001_valid_csv_exits_zero`, `req_001_report_goes_to_stdout_not_stderr`, `req_001_process_terminates_on_its_own`, `req_001_stdin_is_not_consulted`, `unit_main_writes_the_report_to_stdout` |
+| REQ-001 | A missing argument, missing file, directory or undecodable file is a non-zero stop with no report lines | `req_001_missing_argument_is_a_usage_error`, `req_001_extra_argument_is_rejected`, `req_001_missing_file_is_a_stop_error`, `req_001_directory_argument_is_a_stop_error`, `req_001_undecodable_input_is_a_stop_error`, `unit_main_rejects_a_wrong_argument_count`, `unit_main_stops_on_unreadable_input`, `unit_main_stops_on_a_permission_denied_input` |
+| REQ-002 | `region,amount` and `Region , Amount` are accepted; the header is never a data row | `req_002_header_row_is_not_a_data_row`, `req_002_declared_header_is_accepted`, `req_002_header_is_trimmed_and_case_insensitive`, `req_002_quoted_header_is_read_normally`, `unit_locate_header_accepts_the_declared_header`, `unit_locate_header_trims_blanks_and_ignores_case` |
+| REQ-002 | A missing or wrong header is fatal with no report lines | `req_002_a_missing_header_is_fatal`, `req_002_a_wrong_header_is_fatal`, `unit_locate_header_rejects_the_wrong_order`, `unit_locate_header_rejects_other_or_extra_columns`, `unit_locate_header_rejects_a_missing_header`, `unit_main_stops_on_a_missing_or_wrong_header` |
+| REQ-002 | RFC 4180 quoting: a quoted comma region is one record | `req_002_a_quoted_comma_region_is_one_record`, `req_002_crlf_line_endings_are_accepted`, `req_002_utf8_bom_before_the_header_is_ignored`, `req_002_a_missing_final_newline_is_accepted` |
+| REQ-003 | One line per distinct region, sorted by UTF-8 bytes | `req_003_sample_report`, `req_003_three_distinct_regions_yield_three_lines`, `req_003_exactly_one_line_per_region`, `req_003_regions_are_sorted_by_utf8_bytes`, `req_003_regions_are_case_sensitive`, `req_003_non_ascii_regions_survive` |
+| REQ-003 | Region is trimmed before grouping/printing; case is significant | `req_003_regions_are_trimmed_before_grouping_and_printing`, `req_003_regions_are_case_sensitive`, `unit_parse_row_trims_the_region`, `unit_parse_row_keeps_region_case_and_inner_spaces` |
+| REQ-003 | `<count> <sum> <mean>` are the group's row count, exact sum and mean | `req_003_count_is_the_number_of_accepted_rows_in_the_group`, `req_003_sum_and_mean_have_exactly_two_decimals`, `req_003_mean_is_sum_over_count`, `req_003_printed_aggregates_match_an_independent_recomputation`, `unit_summarise_groups_sorts_and_prints_the_sample` |
+| REQ-004 | Exactly one `TOTAL <count> <sum>`, after the region lines, always printed | `req_004_there_is_exactly_one_total_line`, `req_004_total_line_shape_and_value`, `req_004_header_only_file_totals_zero`, `unit_summarise_reports_an_empty_report_for_a_header_only_file` |
+| REQ-004 | Per-region counts and sums add up to TOTAL | `req_004_total_count_is_the_sum_of_region_counts`, `req_004_total_sum_is_the_sum_of_the_accepted_amounts`, `req_004_printed_region_sums_add_up_to_the_total_line`, `req_004_total_includes_every_duplicate_row` |
+| REQ-005 | A malformed row is skipped, excluded and counted on `SKIPPED` (AMB-001) | `req_005_a_non_numeric_amount_is_counted_and_excluded`, `req_005_every_malformed_shape_is_counted`, `req_005_malformed_rows_do_not_change_any_aggregate`, `req_005_all_rows_malformed_still_exits_zero`, `unit_parse_row_skips_every_malformed_row`, `unit_summarise_counts_malformed_rows_without_aggregating_them`, `unit_read_records_turns_a_csv_error_into_a_malformed_record` |
+| REQ-005 | `SKIPPED` appears once, after `TOTAL`, and is `0` for a clean file | `req_005_skipped_line_is_last_and_appears_once`, `req_005_clean_file_prints_skipped_zero` |
+| REQ-006 | Identical rows each count as their own order (AMB-002) | `req_006_identical_rows_each_count`, `req_006_three_identical_rows_each_count`, `req_006_no_de_duplication`, `unit_summarise_keeps_every_duplicate_row` |
+| REQ-007 | Exactly two decimals, half-up, exact arithmetic, reproducible | `req_007_mean_of_ten_thirds_is_three_point_three_three`, `req_007_two_point_zero_zero_five_rounds_up`, `req_007_trailing_zeros_are_always_printed`, `req_007_half_up_at_the_second_decimal`, `req_007_negative_halves_round_away_from_zero`, `req_007_repeated_runs_are_byte_identical`, `unit_format_money_rounds_an_exact_half_away_from_zero`, `unit_format_money_rounds_negative_halves_away_from_zero`, `unit_format_money_truncates_below_a_half`, `unit_format_money_always_prints_two_decimals` |
+| REQ-008 | Zero and negative amounts are valid; region case matters | `req_008_zero_and_negative_amounts_are_included`, `req_008_zero_amount_counts`, `req_008_region_case_is_significant` |
+| REQ-009 | Shuffling rows leaves the report byte-identical | `req_009_shuffled_rows_give_the_same_report`, `req_009_permutations_with_duplicates_and_bad_rows`, `req_009_all_permutations_of_a_small_fixture_are_identical` |
+| REQ-010 | One documented command runs the delivered suite | `req_010_run_tests_entry_point_exists`, and `bash run-tests.sh` itself |
 
 ## Ambiguity decisions
 
 | Ambiguity | Chosen behaviour | Checks |
 | --- | --- | --- |
-| AMB-001 | Half-up: an exact half rounds away from zero (`6.25` -> `6.3`) | `amb_001_exact_half_rounds_up` (`6.25`, `6.35`, `6.15`, `2.25`), `amb_001_exact_half_rounds_up_near_one_hundred` (`99.95` -> `100.0`), `amb_001_exact_half_rounds_up_near_zero` (`0.05` -> `0.1`), `amb_001_non_half_values_round_normally`, `unit_render_tenths_rounds_an_exact_half_away_from_zero`, `unit_render_tenths_truncates_below_a_half`, `unit_percentage_uses_points_and_half_up`, `req_004_percentage_grid_matches_half_up` |
-| AMB-002 | Merge: every occurrence counts, with passed and total summed into one line | `amb_002_merge_sums_passed_and_total`, `amb_002_merge_percentage_uses_the_summed_counts`, `amb_002_merge_is_not_the_last_row`, `amb_002_merge_is_not_the_first_row`, `amb_002_merge_over_three_occurrences`, `amb_002_merge_still_prints_one_line`, `amb_002_merge_keeps_first_appearance_order`, `unit_summarise_merges_a_repeated_suite` |
-| AMB-003 | Skip-silent: skip the row, print nothing about it, still exit 0 | `amb_003_non_numeric_passed_row_is_skipped`, `amb_003_non_numeric_total_row_is_skipped`, `amb_003_empty_count_cells_are_skipped`, `amb_003_quoted_non_numeric_counts_are_skipped`, `amb_003_zero_total_row_is_skipped`, `amb_003_zero_total_written_as_a_decimal_is_skipped`, `amb_003_short_row_is_skipped`, `amb_003_blank_line_is_skipped`, `amb_003_blank_suite_id_is_skipped`, `amb_003_negative_counts_are_skipped`, `amb_003_skipped_rows_do_not_change_any_aggregate`, `amb_003_a_suite_with_only_bad_rows_is_absent`, `amb_003_all_rows_bad_still_exits_zero_with_total_zero`, `amb_003_no_skipped_counter_is_printed`, `unit_parse_row_skips_every_unusable_row`, `unit_read_records_turns_a_csv_error_into_a_skipped_record` |
-
-## Input-format edges
-
-The integration suite also covers quoted fields, extra columns on either side
-of the declared ones, CRLF line endings, a UTF-8 BOM, a missing final newline,
-a header-only file, an input path containing spaces, and a minimal environment
-with no install step.
+| AMB-001 | `skip-count`: skip the malformed row, exclude it, count it on `SKIPPED` | `req_005_*`, `unit_parse_row_skips_every_malformed_row`, `unit_summarise_counts_malformed_rows_without_aggregating_them`, `unit_read_records_turns_a_csv_error_into_a_malformed_record` |
+| AMB-002 | `merge`: identical rows each count as their own order | `req_006_*`, `unit_summarise_keeps_every_duplicate_row` |
+| AMB-003 | `half-up`: an exact half rounds away from zero at two decimals | `req_007_half_up_at_the_second_decimal`, `req_007_two_point_zero_zero_five_rounds_up`, `req_007_negative_halves_round_away_from_zero`, `unit_format_money_rounds_an_exact_half_away_from_zero`, `unit_format_money_rounds_negative_halves_away_from_zero` |
 
 ## Relation coverage
 
-`REL-001` (`derived-ratio`, deciding AMB-001) is checked from both directions:
-each printed percentage is recomputed from the line's own printed numerator and
-denominator in `req_004_percentage_grid_matches_half_up`, and the exact
-one-decimal half-up rendering is checked directly in the `amb_001_*` and
-`unit_render_tenths_*` checks.
-
-## Deliberate non-goals
-
-The tests assert the confirmed contract, not behaviour the document did not
-decide: they do not reserve the suite name `TOTAL`, do not define a suite id
-containing whitespace as a multi-field suite, and do not reject `passed` greater
-than `total` (the document only requires a 0-100 percentage in percentage
-points and does not make that row unusable).
+* `REL-001` (malformed-row-accounting, AMB-001) is checked by comparing a dirty
+  fixture with its clean twin: the aggregates match and only `SKIPPED` grows.
+* `REL-002` (duplicate-resolution, AMB-002) is checked by repeating identical
+  rows and asserting count and sum both grow.
+* `REL-003` (additivity) is checked by summing the printed per-region counts and
+  amounts against the printed `TOTAL` line.
+* `REL-004` (row-order invariance) is checked by running the same multiset of
+  rows in different orders and comparing stdout byte-for-byte.
+* `DIFF-001` (independent aggregation, AMB-003) is checked by recomputing money
+  with `decimal.Decimal` in `req_004_total_sum_is_the_sum_of_the_accepted_amounts`,
+  by recomputing every region's count/sum/mean independently in
+  `req_003_printed_aggregates_match_an_independent_recomputation`, and by direct
+  half-up boundary cases in the `req_007_*` and `unit_format_money_*` checks.

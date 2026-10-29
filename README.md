@@ -1,38 +1,57 @@
-# summary.sh — per-suite pass percentages from a test-run CSV
+# summary.sh — per-region revenue and average order value from a sales CSV
 
-A small command-line tool with no install or build step and no network access.
+A small command-line report tool with no install or build step and no network
+access.
 
 ```
-bash summary.sh records.csv
+bash summary.sh sales.csv
 ```
 
-The input is a CSV of test-run records. Its first row is a header naming the
-columns `suite`, `passed` and `total`; the columns are located by name, so a
-reordered file gives the same answer. (A file without a header row is read in
-the declared `suite,passed,total` order.)
+The input is a CSV of sales records. Its first line is the header
+`region,amount`. Header names are compared case-insensitively after trimming
+surrounding blanks, and the columns must be exactly `region` then `amount`;
+a missing, unreadable or different header is a fatal error (non-zero exit, a
+diagnostic on stderr, no report lines). Data rows follow one per line, with
+standard RFC 4180 quoting, so a quoted region may contain a comma.
+
+```
+region,amount
+north,120.50
+south,80.00
+north,99.50
+east,45.25
+```
 
 The report goes to standard output:
 
 ```
-auth-service 50 54 92.6
-billing 12 12 100.0
-search 7 9 77.8
-TOTAL 75
+east 1 45.25 45.25
+north 2 220.00 110.00
+south 1 80.00 80.00
+TOTAL 4 345.25
+SKIPPED 0
 ```
 
-* one `<suite> <passed> <total> <percentage>` line per distinct suite, in order
-  of first appearance (REQ-003);
-* `<percentage>` is `passed / total * 100` in percentage points, one decimal
-  place, rounded half away from zero (REQ-004, AMB-001);
-* `TOTAL <tests>` once, after the suite lines: the summed `total` of the printed
-  suite lines (REQ-005);
-* a repeated suite is merged into one line whose `passed` and `total` are the
-  sums over its rows (AMB-002);
-* a row that cannot yield a percentage is skipped silently and the run still
-  exits 0 (AMB-003).
+* one `<region> <count> <sum> <mean>` line per distinct region, sorted ascending
+  by the UTF-8 bytes of the region name, so the report does not depend on row
+  order (REQ-003, REQ-009);
+* the region string is trimmed before grouping and printing; region case is
+  significant, so `North` and `north` are separate groups (REQ-003, REQ-008);
+* `sum` is the group's exact revenue and `mean` is `sum / count`; both are
+  printed with exactly two decimals, rounded half away from zero (REQ-007,
+  AMB-003);
+* zero and negative amounts are ordinary orders and are included (REQ-008);
+* identical rows are independent orders: every occurrence counts (AMB-002);
+* `TOTAL <count> <sum>` is printed exactly once, after the region lines, and
+  covers every accepted row (REQ-004);
+* a row that cannot be parsed — a field count other than two, an empty region
+  after trimming, or an amount that is not a plain decimal such as `abc`,
+  `1e3`, `$5` or `1,000` — is skipped and excluded from every aggregate, and
+  `SKIPPED <skipped-count>` is printed once after the totals line (REQ-005,
+  AMB-001). A clean file prints `SKIPPED 0`.
 
-Arithmetic is exact (`fractions.Fraction`), so row order and binary floating
-point cannot change a printed digit.
+Arithmetic is exact (`fractions.Fraction`), never binary floating point, so
+repeated runs print byte-identical output.
 
 ## Tests
 
@@ -43,14 +62,14 @@ bash run-tests.sh
 Runs both halves of the delivered suite through one TAP report:
 
 * `tests/test_units.py` exercises the functions in `summary.py` directly
-  (header lookup, half-up rendering, aggregation, row skipping, I/O edges);
+  (header validation, amount parsing, money formatting, aggregation, skipping);
 * `tests/test_summary.py` drives the real entry point in subprocesses and
   asserts every acceptance criterion and every `AMB-nnn` decision in
   `docs/requirements/intake.yaml`.
 
 The report is written to `reports/tests.tap` and echoed to stdout; the runner
-returns non-zero when any check fails. `docs/test-plan.md` maps each
-acceptance criterion to the checks that cover it.
+returns non-zero when any check fails. `docs/test-plan.md` maps each acceptance
+criterion to the checks that cover it.
 
 ```
 bash mutation.sh
@@ -69,4 +88,5 @@ survives.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs the delivered tests and the delivered command.
+`.github/workflows/ci.yml` runs the delivered tests and the delivered command on
+a sample carrying the declared `region,amount` header.

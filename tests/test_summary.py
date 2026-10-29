@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""TAP test suite for the delivered ``bash summary.sh``.
+"""TAP integration suite for the delivered ``bash summary.sh``.
 
 The contract under test is ``docs/requirements/intake.yaml``:
 
-    run:         bash summary.sh {csv}
-    suite line:  <suite> <passed> <total> <percentage>
-    total line:  TOTAL <tests>
+    run:          bash summary.sh {csv}
+    region line:  <region> <count> <sum> <mean>
+    total line:   TOTAL <count> <sum>
+    skipped line: SKIPPED <skipped-count>
 
-The integration checks here drive the real entry point in a subprocess, so what
-is asserted is the behaviour a caller (and the delivery's reviewer) sees. The
-unit checks live in ``tests/test_units.py`` and are pulled into the same TAP
-report. The report is written to ``reports/tests.tap`` (override with
-``TAP_OUT``) and echoed to stdout; the process exits 0 only when every check
-passes.
+The checks here drive the real entry point in a subprocess, so what is asserted
+is the behaviour a caller (and the delivery's reviewer) sees. The unit checks
+live in ``tests/test_units.py`` and are pulled into the same TAP report. The
+report is written to ``reports/tests.tap`` (override with ``TAP_OUT``) and
+echoed to stdout; the process exits 0 only when every check passes.
 """
 
 import os
@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_units import UNIT_TESTS  # noqa: E402 - unit checks share this report
@@ -30,8 +31,9 @@ SCRIPT = os.path.join(ROOT, "summary.sh")
 TAP_OUT = os.environ.get("TAP_OUT", os.path.join(ROOT, "reports", "tests.tap"))
 TIMEOUT = 30
 
-SUITE_LINE = re.compile(r"^([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)$")
-ONE_DECIMAL = re.compile(r"^-?[0-9]+\.[0-9]$")
+MONEY = re.compile(r"^-?[0-9]+\.[0-9]{2}$")
+TOTAL_LINE = re.compile(r"^TOTAL ([0-9]+) (-?[0-9]+\.[0-9]{2})$")
+SKIPPED_LINE = re.compile(r"^SKIPPED ([0-9]+)$")
 
 RESULTS = []
 SANDBOX = tempfile.mkdtemp(prefix="summary-tests-")
@@ -74,12 +76,12 @@ def lines_of(output):
     return stripped.split("\n") if stripped else []
 
 
-def suite_lines(output):
-    return [line for line in lines_of(output) if not line.startswith("TOTAL ")]
-
-
-def total_lines(output):
-    return [line for line in lines_of(output) if line.startswith("TOTAL ")]
+def region_lines(output):
+    return [
+        line
+        for line in lines_of(output)
+        if not line.startswith("TOTAL ") and not line.startswith("SKIPPED ")
+    ]
 
 
 def report(text):
@@ -94,36 +96,35 @@ def expect(text, expected):
     assert got == expected, "got %r, want %r" % (got, expected)
 
 
-def percentage_of(text, suite):
-    for line in suite_lines("\n".join(report(text))):
-        fields = line.split(" ")
-        if fields[0] == suite:
-            return fields[3]
-    raise AssertionError("no suite line for %r in %r" % (suite, text))
+def fail_report(text):
+    """Run a file that must be a fatal error and return the process."""
+    proc = run([csv_file(text)])
+    assert proc.returncode != 0, "a fatal error must exit non-zero: %r" % proc.stdout
+    assert proc.stdout == "", "no report line may be printed: %r" % proc.stdout
+    assert proc.stderr.strip(), "a diagnostic on stderr is expected"
+    return proc
 
 
-def expected_percentage(passed, total):
-    """Half-up rendering computed independently of summary.percentage."""
-    whole, remainder = divmod(passed * 1000, total)
-    if remainder * 2 >= total:
-        whole += 1
-    return "%d.%d" % (whole // 10, whole % 10)
+def fields_of(line):
+    """Split ``<region> <count> <sum> <mean>`` from the right."""
+    parts = line.rsplit(" ", 3)
+    assert len(parts) == 4, "not the declared shape: %r" % line
+    return parts
 
 
-# The document's own sample rows, with the declared header. auth-service spans
-# two rows: 48+2 passes out of 50+4 tests = 92.592...% -> 92.6.
-BASE = (
-    "suite,passed,total\n"
-    "auth-service,48,50\n"
-    "billing,12,12\n"
-    "search,7,9\n"
-    "auth-service,2,4\n"
+SAMPLE = (
+    "region,amount\n"
+    "north,120.50\n"
+    "south,80.00\n"
+    "north,99.50\n"
+    "east,45.25\n"
 )
-BASE_REPORT = [
-    "auth-service 50 54 92.6",
-    "billing 12 12 100.0",
-    "search 7 9 77.8",
-    "TOTAL 75",
+SAMPLE_REPORT = [
+    "east 1 45.25 45.25",
+    "north 2 220.00 110.00",
+    "south 1 80.00 80.00",
+    "TOTAL 4 345.25",
+    "SKIPPED 0",
 ]
 
 
@@ -142,37 +143,37 @@ def req_001_entry_point_is_executable_with_shebang():
 
 
 def req_001_valid_csv_exits_zero():
-    proc = run([csv_file(BASE)])
+    proc = run([csv_file(SAMPLE)])
     assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
 
 
 def req_001_report_goes_to_stdout_not_stderr():
-    proc = run([csv_file(BASE)])
-    assert proc.stdout == "\n".join(BASE_REPORT) + "\n", "stdout %r" % proc.stdout
+    proc = run([csv_file(SAMPLE)])
+    assert proc.stdout == "\n".join(SAMPLE_REPORT) + "\n", "stdout %r" % proc.stdout
     assert proc.stderr == "", "stderr %r" % proc.stderr
 
 
 def req_001_process_terminates_on_its_own():
     # `run` enforces TIMEOUT; a hung process raises TimeoutExpired and fails here.
-    proc = run([csv_file(BASE)])
+    proc = run([csv_file(SAMPLE)])
     assert proc.returncode == 0
 
 
 def req_001_runs_from_another_working_directory():
-    path = csv_file(BASE)
+    path = csv_file(SAMPLE)
     proc = run([path], cwd=SANDBOX)
     assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
-    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+    assert lines_of(proc.stdout) == SAMPLE_REPORT, "got %r" % lines_of(proc.stdout)
 
 
 def req_001_relative_input_path_resolves_from_cwd():
     workdir = os.path.join(SANDBOX, "relative")
     os.makedirs(workdir, exist_ok=True)
     with open(os.path.join(workdir, "records.csv"), "w", encoding="utf-8") as handle:
-        handle.write(BASE)
+        handle.write(SAMPLE)
     proc = run(["records.csv"], cwd=workdir)
     assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
-    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+    assert lines_of(proc.stdout) == SAMPLE_REPORT, "got %r" % lines_of(proc.stdout)
 
 
 def req_001_runs_without_an_install_or_build_step():
@@ -183,15 +184,15 @@ def req_001_runs_without_an_install_or_build_step():
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
     }
-    proc = run([csv_file(BASE, "minimal-env.csv")], env=env)
+    proc = run([csv_file(SAMPLE, "minimal-env.csv")], env=env)
     assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
-    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+    assert lines_of(proc.stdout) == SAMPLE_REPORT, "got %r" % lines_of(proc.stdout)
 
 
 def req_001_input_path_may_contain_spaces():
-    proc = run([csv_file(BASE, "records with spaces.csv")])
+    proc = run([csv_file(SAMPLE, "records with spaces.csv")])
     assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
-    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+    assert lines_of(proc.stdout) == SAMPLE_REPORT, "got %r" % lines_of(proc.stdout)
 
 
 def req_001_missing_argument_is_a_usage_error():
@@ -202,7 +203,7 @@ def req_001_missing_argument_is_a_usage_error():
 
 
 def req_001_extra_argument_is_rejected():
-    proc = run([csv_file(BASE), "stray"])
+    proc = run([csv_file(SAMPLE), "stray"])
     assert proc.returncode != 0, "an extra argument must not look like a success"
     assert proc.stdout == "", "no result line may be printed: %r" % proc.stdout
 
@@ -220,440 +221,553 @@ def req_001_directory_argument_is_a_stop_error():
     assert proc.stdout == "", "no result line may be printed: %r" % proc.stdout
 
 
+def req_001_undecodable_input_is_a_stop_error():
+    path = os.path.join(SANDBOX, "undecodable.csv")
+    with open(path, "wb") as handle:
+        handle.write(b"region,amount\nnorth,\xff\n")
+    proc = run([path])
+    assert proc.returncode != 0, "an undecodable input must not look like a success"
+    assert proc.stdout == "", "no result line may be printed: %r" % proc.stdout
+    assert proc.stderr.strip(), "a diagnostic on stderr is expected"
+
+
 def req_001_stdin_is_not_consulted():
-    proc = run([csv_file(BASE)], stdin="suite,passed,total\nghost,1,1\n")
-    assert lines_of(proc.stdout) == BASE_REPORT, "got %r" % lines_of(proc.stdout)
+    proc = run([csv_file(SAMPLE)], stdin="region,amount\nghost,1.00\n")
+    assert lines_of(proc.stdout) == SAMPLE_REPORT, "got %r" % lines_of(proc.stdout)
 
 
-# --- REQ-002: the header is consumed and columns are located by name ----------
+# --- REQ-002: exactly region,amount; a wrong or missing header is fatal ------
 
 
 def req_002_header_row_is_not_a_data_row():
-    out = report(BASE)
-    assert all(line.split(" ")[0] != "suite" for line in suite_lines("\n".join(out))), out
+    out = report(SAMPLE)
+    assert all(fields_of(line)[0] != "region" for line in region_lines("\n".join(out))), out
 
 
-def req_002_declared_column_order_is_the_report():
-    expect(BASE, BASE_REPORT)
+def req_002_declared_header_is_accepted():
+    expect(SAMPLE, SAMPLE_REPORT)
 
 
-def req_002_reordered_columns_yield_the_same_report():
-    reordered = (
-        "total,suite,passed\n"
-        "50,auth-service,48\n"
-        "12,billing,12\n"
-        "9,search,7\n"
-        "4,auth-service,2\n"
+def req_002_header_is_trimmed_and_case_insensitive():
+    variant = (
+        " Region ,\tAMOUNT \n"
+        "north,120.50\n"
+        "south,80.00\n"
+        "north,99.50\n"
+        "east,45.25\n"
     )
-    expect(reordered, BASE_REPORT)
+    expect(variant, SAMPLE_REPORT)
 
 
-def req_002_header_cells_may_carry_blanks():
-    spaced = (
-        " suite , passed , total \n"
-        "auth-service,48,50\n"
-        "billing,12,12\n"
-        "search,7,9\n"
-        "auth-service,2,4\n"
-    )
-    expect(spaced, BASE_REPORT)
+def req_002_quoted_header_is_read_normally():
+    expect('"region","amount"\nnorth,1.00\n', ["north 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"])
 
 
-def req_002_header_names_are_case_insensitive():
-    shouted = (
-        "Suite,Passed,Total\n"
-        "auth-service,48,50\n"
-        "billing,12,12\n"
-        "search,7,9\n"
-        "auth-service,2,4\n"
-    )
-    expect(shouted, BASE_REPORT)
+def req_002_a_missing_header_is_fatal():
+    # The deliverable sample is written without the header; REQ-002 makes a
+    # headerless file fatal rather than guessing the columns.
+    fail_report("north,120.50\nsouth,80.00\nnorth,99.50\neast,45.25\n")
+    fail_report("")
 
 
-def req_002_headerless_sample_is_read_in_declared_order():
-    # The document's input_format.sample carries no header row.
-    sample = "auth-service,48,50\nbilling,12,12\nsearch,7,9\nauth-service,2,4\n"
-    expect(sample, BASE_REPORT)
+def req_002_a_wrong_header_is_fatal():
+    for text in (
+        "amount,region\n120.50,north\n",
+        "region,total\nnorth,120.50\n",
+        "region,amount,note\nnorth,120.50,x\n",
+        "region\nnorth\n",
+    ):
+        fail_report(text)
 
 
-def req_002_header_only_file_reports_an_empty_total():
-    expect("suite,passed,total\n", ["TOTAL 0"])
+def req_002_header_only_file_is_an_empty_report():
+    expect("region,amount\n", ["TOTAL 0 0.00", "SKIPPED 0"])
 
 
-def req_002_a_data_row_is_not_mistaken_for_a_header():
-    expect("suite,3,4\n", ["suite 3 4 75.0", "TOTAL 4"])
-
-
-def req_002_extra_columns_after_the_declared_ones_are_ignored():
+def req_002_a_quoted_comma_region_is_one_record():
     expect(
-        "suite,passed,total,note\n"
-        "alpha,1,2,hello\n",
-        ["alpha 1 2 50.0", "TOTAL 2"],
-    )
-
-
-def req_002_extra_columns_anywhere_do_not_disturb_the_lookup():
-    expect(
-        "note,total,suite,passed\n"
-        "hello,2,alpha,1\n",
-        ["alpha 1 2 50.0", "TOTAL 2"],
-    )
-
-
-def req_002_quoted_header_and_fields_are_read_normally():
-    expect(
-        '"suite","passed","total"\n'
-        '"alpha","1","2"\n',
-        ["alpha 1 2 50.0", "TOTAL 2"],
+        'region,amount\n"North, East",100.00\n',
+        ["North, East 1 100.00 100.00", "TOTAL 1 100.00", "SKIPPED 0"],
     )
 
 
 def req_002_crlf_line_endings_are_accepted():
     expect(
-        "suite,passed,total\r\n"
-        "alpha,1,2\r\n"
-        "beta,3,4\r\n",
-        ["alpha 1 2 50.0", "beta 3 4 75.0", "TOTAL 6"],
+        "region,amount\r\nnorth,1.00\r\nsouth,2.00\r\n",
+        [
+            "north 1 1.00 1.00",
+            "south 1 2.00 2.00",
+            "TOTAL 2 3.00",
+            "SKIPPED 0",
+        ],
     )
 
 
 def req_002_utf8_bom_before_the_header_is_ignored():
-    expect(
-        "\ufeffsuite,passed,total\n"
-        "alpha,1,2\n",
-        ["alpha 1 2 50.0", "TOTAL 2"],
-    )
+    expect("\ufeffregion,amount\nnorth,1.00\n", ["north 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"])
 
 
 def req_002_a_missing_final_newline_is_accepted():
-    expect("suite,passed,total\nalpha,1,2", ["alpha 1 2 50.0", "TOTAL 2"])
+    expect("region,amount\nnorth,1.00", ["north 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"])
 
 
-def req_002_reordered_header_still_merges_a_repeated_suite():
+# --- REQ-003: one sorted line per region -------------------------------------
+
+
+def req_003_sample_report():
+    expect(SAMPLE, SAMPLE_REPORT)
+
+
+def req_003_three_distinct_regions_yield_three_lines():
+    out = report("region,amount\nc,1\na,2\nb,3\n")
+    assert len(region_lines("\n".join(out))) == 3, out
+
+
+def req_003_exactly_one_line_per_region():
+    out = report("region,amount\nnorth,1\nsouth,2\nnorth,3\n")
+    names = [fields_of(line)[0] for line in region_lines("\n".join(out))]
+    assert names == ["north", "south"], names
+    assert len(names) == len(set(names)), names
+
+
+def req_003_regions_are_sorted_by_utf8_bytes():
+    out = report("region,amount\nb,1\nA,2\na,3\nB,4\n")
+    names = [fields_of(line)[0] for line in region_lines("\n".join(out))]
+    assert names == ["A", "B", "a", "b"], names
+    # Byte 0xD0 sorts after every ASCII byte, so a Cyrillic region is last.
+    out = report("region,amount\n\u0414,1\nz,2\n\u00c1,3\n")
+    names = [fields_of(line)[0] for line in region_lines("\n".join(out))]
+    assert names == ["z", "\u00c1", "\u0414"], names
+
+
+def req_003_regions_are_trimmed_before_grouping_and_printing():
     expect(
-        "total,passed,suite\n"
-        "2,1,alpha\n"
-        "2,1,alpha\n",
-        ["alpha 2 4 50.0", "TOTAL 4"],
+        "region,amount\n  north\t,1.00\nnorth ,2.00\n",
+        ["north 2 3.00 1.50", "TOTAL 2 3.00", "SKIPPED 0"],
     )
 
 
-# --- REQ-003: one line per distinct suite, first-appearance order -------------
+def req_003_regions_are_case_sensitive():
+    out = report("region,amount\nNorth,10.00\nnorth,20.00\n")
+    names = [fields_of(line)[0] for line in region_lines("\n".join(out))]
+    assert names == ["North", "north"], names
 
 
-def req_003_three_distinct_suites_yield_three_lines():
-    out = report("suite,passed,total\nalpha,1,1\nbeta,1,1\ngamma,1,1\n")
-    assert len(suite_lines("\n".join(out))) == 3, out
+def req_003_non_ascii_regions_survive():
+    expect(
+        "region,amount\ncaf\u00e9,1.00\n",
+        ["caf\u00e9 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"],
+    )
 
 
-def req_003_a_repeated_suite_yields_one_line():
-    out = report(BASE)
-    tokens = [line.split(" ")[0] for line in suite_lines("\n".join(out))]
-    assert tokens == ["auth-service", "billing", "search"], tokens
-    assert len(tokens) == len(set(tokens)), tokens
+def req_003_count_is_the_number_of_accepted_rows_in_the_group():
+    out = report("region,amount\na,1\na,2\na,3\nb,4\n")
+    counts = {fields_of(line)[0]: int(fields_of(line)[1]) for line in region_lines("\n".join(out))}
+    assert counts == {"a": 3, "b": 1}, counts
 
 
-def req_003_suites_are_in_first_appearance_order():
-    out = report("suite,passed,total\nzeta,1,2\nalpha,1,2\nmu,1,2\n")
-    tokens = [line.split(" ")[0] for line in suite_lines("\n".join(out))]
-    assert tokens == ["zeta", "alpha", "mu"], tokens
+def req_003_sum_and_mean_have_exactly_two_decimals():
+    out = report(SAMPLE)
+    for line in region_lines("\n".join(out)):
+        region, count, total, mean = fields_of(line)
+        assert count.isdigit(), line
+        assert MONEY.match(total), line
+        assert MONEY.match(mean), line
 
 
-def req_003_suite_names_are_not_case_folded():
-    out = report("suite,passed,total\nAuth-Service,1,1\n")
-    assert suite_lines("\n".join(out))[0].split(" ")[0] == "Auth-Service", out
+def req_003_mean_is_sum_over_count():
+    out = report("region,amount\na,1.00\na,2.00\na,4.00\n")
+    region, count, total, mean = fields_of(region_lines("\n".join(out))[0])
+    assert (region, count, total, mean) == ("a", "3", "7.00", "2.33"), [region, count, total, mean]
 
 
-def req_003_suite_names_are_echoed_verbatim():
-    out = report("suite,passed,total\nsvc.api_v2-x,1,1\n")
-    assert suite_lines("\n".join(out))[0].split(" ")[0] == "svc.api_v2-x", out
+# --- REQ-004: exactly one totals line, always printed ------------------------
 
 
-def req_003_non_ascii_suite_names_survive():
-    out = report("suite,passed,total\ncaf\u00e9-\u00dcnit,1,1\n")
-    assert suite_lines("\n".join(out))[0].split(" ")[0] == "caf\u00e9-\u00dcnit", out
+def req_004_there_is_exactly_one_total_line():
+    out = report(SAMPLE)
+    totals = [line for line in out if line.startswith("TOTAL ")]
+    assert len(totals) == 1, out
 
 
-def req_003_suite_ids_are_not_trimmed():
-    # A quoted leading blank is part of the suite id and must be echoed.
-    out = report('suite,passed,total\n" padded",1,2\n')
-    assert out == [" padded 1 2 50.0", "TOTAL 2"], out
+def req_004_total_line_shape_and_value():
+    out = report(SAMPLE)
+    assert out[-2] == "TOTAL 4 345.25", out
+    match = TOTAL_LINE.match(out[-2])
+    assert match, out[-2]
+    assert match.group(1) == "4"
+    assert MONEY.match(match.group(2))
 
 
-def req_003_a_quoted_comma_stays_one_suite_line():
-    out = report('suite,passed,total\n"a,b",1,2\n')
-    assert out == ["a,b 1 2 50.0", "TOTAL 2"], out
+def req_004_header_only_file_totals_zero():
+    assert report("region,amount\n") == ["TOTAL 0 0.00", "SKIPPED 0"]
 
 
-def req_003_each_suite_line_carries_four_fields():
-    for line in suite_lines("\n".join(report(BASE))):
-        assert SUITE_LINE.match(line), "not the declared shape: %r" % line
+def req_004_total_count_is_the_sum_of_region_counts():
+    out = report("region,amount\na,1\na,2\nb,3\nc,4\n")
+    counts = [int(fields_of(line)[1]) for line in region_lines("\n".join(out))]
+    total = TOTAL_LINE.match(out[-2])
+    assert total and int(total.group(1)) == sum(counts), out
 
 
-def req_003_the_report_has_no_other_lines():
-    for line in report(BASE):
-        assert SUITE_LINE.match(line) or line.startswith("TOTAL "), "unexpected line %r" % line
+def req_004_total_sum_is_the_sum_of_the_accepted_amounts():
+    text = "region,amount\na,10.25\nb,-2.50\na,1.00\nb,4.75\n"
+    out = report(text)
+    expected = Decimal("10.25") + Decimal("-2.50") + Decimal("1.00") + Decimal("4.75")
+    total = TOTAL_LINE.match(out[-2])
+    assert total, out
+    assert Decimal(total.group(2)) == expected, (out, expected)
 
 
-def req_003_suite_lines_are_emitted_before_the_total():
-    out = report(BASE)
-    assert out[-1].startswith("TOTAL "), out
-    assert all(not line.startswith("TOTAL ") for line in out[:-1]), out
+def req_004_total_includes_every_duplicate_row():
+    out = report("region,amount\nsouth,50.00\nsouth,50.00\n")
+    assert out == ["south 2 100.00 50.00", "TOTAL 2 100.00", "SKIPPED 0"], out
 
 
-# --- REQ-004: percentage in points, one decimal, half away from zero ----------
+# --- REQ-005 / AMB-001: malformed rows are skipped and counted ---------------
 
 
-def req_004_declared_examples():
-    out = report("suite,passed,total\na,48,50\nb,12,12\nc,1,3\n")
-    assert out == ["a 48 50 96.0", "b 12 12 100.0", "c 1 3 33.3", "TOTAL 65"], out
+def req_005_a_non_numeric_amount_is_counted_and_excluded():
+    clean = "region,amount\nnorth,120.50\nsouth,80.00\n"
+    dirty = "region,amount\nnorth,120.50\nsouth,abc\nsouth,80.00\n"
+    assert report(dirty) == report(clean)[:-1] + ["SKIPPED 1"], report(dirty)
 
 
-def req_004_percentage_always_has_exactly_one_decimal():
-    out = report("suite,passed,total\na,0,5\nb,5,5\nc,2,3\nd,1,8\n")
-    for line in suite_lines("\n".join(out)):
-        token = line.split(" ")[3]
-        assert ONE_DECIMAL.match(token), "token %r is not one decimal" % token
+def req_005_every_malformed_shape_is_counted():
+    text = (
+        "region,amount\n"
+        "ok,1.00\n"
+        "short\n"                 # one field
+        "ok,2.00,extra\n"         # three fields
+        ",5.00\n"                 # empty region
+        "   ,5.00\n"              # blank region after trimming
+        "ok,\n"                   # empty amount
+        "ok,abc\n"                # not a number
+        "ok,1e3\n"                # exponent notation
+        'ok,"1,000"\n'            # thousands separator (quoted)
+        "ok,$5\n"                 # currency symbol
+        "ok,5.\n"                 # no digits after the point
+        "ok,.5\n"                 # no digits before the point
+        "\n"                      # blank line: no fields
+    )
+    out = report(text)
+    assert out[0] == "ok 1 1.00 1.00", out
+    assert out[1] == "TOTAL 1 1.00", out
+    assert out[2] == "SKIPPED 12", out
 
 
-def req_004_percentage_is_in_points_not_a_fraction():
-    assert percentage_of(BASE, "auth-service") == "92.6"
+def req_005_clean_file_prints_skipped_zero():
+    assert report(SAMPLE)[-1] == "SKIPPED 0"
 
 
-def req_004_zero_percent_is_zero_point_zero():
-    assert percentage_of("suite,passed,total\na,0,5\n", "a") == "0.0"
+def req_005_skipped_line_is_last_and_appears_once():
+    out = report("region,amount\nok,1.00\nbad,abc\n")
+    skipped = [line for line in out if line.startswith("SKIPPED ")]
+    assert skipped == ["SKIPPED 1"], out
+    assert out[-1].startswith("SKIPPED "), out
 
 
-def req_004_a_full_pass_is_one_hundred():
-    assert percentage_of("suite,passed,total\na,7,7\n", "a") == "100.0"
+def req_005_all_rows_malformed_still_exits_zero():
+    assert report("region,amount\nbad,abc\nalso-bad\n") == [
+        "TOTAL 0 0.00",
+        "SKIPPED 2",
+    ]
 
 
-def req_004_thirds_round_to_one_decimal():
-    assert percentage_of("suite,passed,total\na,2,3\n", "a") == "66.7"
-    assert percentage_of("suite,passed,total\na,1,6\n", "a") == "16.7"
+def req_005_malformed_rows_do_not_change_any_aggregate():
+    clean = report("region,amount\nnorth,10.00\nsouth,20.00\n")
+    dirty = report(
+        "region,amount\n"
+        "north,10.00\n"
+        "broken,abc\n"
+        "broken\n"
+        ",20.00\n"
+        "south,20.00\n"
+    )
+    assert dirty[:-1] == clean[:-1], (dirty, clean)
+    assert dirty[-1] == "SKIPPED 3", dirty
 
 
-# AMB-001: exact halves round away from zero, at the one-decimal boundary.
-def amb_001_exact_half_rounds_up():
-    assert percentage_of("suite,passed,total\na,1,16\n", "a") == "6.3"  # 6.25
-    assert percentage_of("suite,passed,total\na,127,2000\n", "a") == "6.4"  # 6.35
-    assert percentage_of("suite,passed,total\na,123,2000\n", "a") == "6.2"  # 6.15
-    assert percentage_of("suite,passed,total\na,9,400\n", "a") == "2.3"  # 2.25
+# --- REQ-006 / AMB-002: identical rows are independent orders ----------------
 
 
-def amb_001_exact_half_rounds_up_near_one_hundred():
-    assert percentage_of("suite,passed,total\na,1999,2000\n", "a") == "100.0"  # 99.95
+def req_006_identical_rows_each_count():
+    expect(
+        "region,amount\nsouth,50.00\nsouth,50.00\n",
+        ["south 2 100.00 50.00", "TOTAL 2 100.00", "SKIPPED 0"],
+    )
 
 
-def amb_001_exact_half_rounds_up_near_zero():
-    assert percentage_of("suite,passed,total\na,1,2000\n", "a") == "0.1"  # 0.05
+def req_006_three_identical_rows_each_count():
+    expect(
+        "region,amount\nsouth,50.00\nsouth,50.00\nsouth,50.00\n",
+        ["south 3 150.00 50.00", "TOTAL 3 150.00", "SKIPPED 0"],
+    )
 
 
-def amb_001_non_half_values_round_normally():
-    assert percentage_of("suite,passed,total\na,1,32\n", "a") == "3.1"  # 3.125
-    assert percentage_of("suite,passed,total\na,1,8\n", "a") == "12.5"
-    assert percentage_of("suite,passed,total\na,3,8\n", "a") == "37.5"
-    assert percentage_of("suite,passed,total\na,1,3\n", "a") == "33.3"
+def req_006_no_de_duplication():
+    out = report("region,amount\na,1.00\na,1.00\n")
+    assert fields_of(out[0])[1] == "2", out
 
 
-def req_004_large_counts_keep_the_exact_ratio():
-    assert percentage_of("suite,passed,total\na,1000000,2000000\n", "a") == "50.0"
+# --- REQ-007 / AMB-003: two decimals, half-up, reproducible -----------------
 
 
-def req_004_decimal_counts_are_exact():
-    out = report("suite,passed,total\na,1.5,3\nb,0.5,2\n")
-    assert out == ["a 1.5 3 50.0", "b 0.5 2 25.0", "TOTAL 5"], out
+def req_007_mean_of_ten_thirds_is_three_point_three_three():
+    out = report("region,amount\nx,10.00\nx,0.00\nx,0.00\n")
+    assert out[0] == "x 3 10.00 3.33", out
 
 
-def req_004_percentage_grid_matches_half_up():
-    rows = ["suite,passed,total"]
-    expected = []
-    total = 0
-    for denominator in range(1, 9):
-        for numerator in range(0, denominator + 1):
-            suite = "s-%d-%d" % (numerator, denominator)
-            rows.append("%s,%d,%d" % (suite, numerator, denominator))
-            expected.append(
-                "%s %d %d %s"
-                % (suite, numerator, denominator, expected_percentage(numerator, denominator))
+def req_007_two_point_zero_zero_five_rounds_up():
+    out = report("region,amount\nx,2.005\n")
+    assert out[0] == "x 1 2.01 2.01", out
+
+
+def req_007_trailing_zeros_are_always_printed():
+    out = report("region,amount\nx,100\n")
+    assert out[0] == "x 1 100.00 100.00", out
+
+
+def req_007_half_up_at_the_second_decimal():
+    out = report("region,amount\nx,1.005\ny,1.015\nz,1.004\n")
+    by_region = {fields_of(line)[0]: fields_of(line)[2] for line in region_lines("\n".join(out))}
+    assert by_region == {"x": "1.01", "y": "1.02", "z": "1.00"}, by_region
+
+
+def req_007_negative_halves_round_away_from_zero():
+    out = report("region,amount\nx,-1.005\n")
+    assert out[0] == "x 1 -1.01 -1.01", out
+
+
+def req_007_repeated_runs_are_byte_identical():
+    path = csv_file(SAMPLE)
+    first = run([path])
+    second = run([path])
+    assert first.returncode == second.returncode == 0
+    assert first.stdout == second.stdout
+
+
+# --- REQ-008: zero and negative amounts are valid; regions are case-sensitive
+
+
+def req_008_zero_and_negative_amounts_are_included():
+    expect(
+        "region,amount\neast,-10.00\neast,30.00\n",
+        ["east 2 20.00 10.00", "TOTAL 2 20.00", "SKIPPED 0"],
+    )
+
+
+def req_008_zero_amount_counts():
+    expect(
+        "region,amount\nwest,0.00\n",
+        ["west 1 0.00 0.00", "TOTAL 1 0.00", "SKIPPED 0"],
+    )
+
+
+def req_008_region_case_is_significant():
+    out = report("region,amount\nNorth,10.00\nnorth,20.00\n")
+    names = [fields_of(line)[0] for line in region_lines("\n".join(out))]
+    assert names == ["North", "north"], names
+
+
+# --- REQ-009: the report does not depend on row order ------------------------
+
+
+def req_009_shuffled_rows_give_the_same_report():
+    rows = ["north,120.50", "south,80.00", "north,99.50", "east,45.25"]
+    ordered = report("region,amount\n" + "\n".join(rows) + "\n")
+    shuffled = report("region,amount\n" + "\n".join(reversed(rows)) + "\n")
+    assert ordered == shuffled, (ordered, shuffled)
+
+
+def req_009_permutations_with_duplicates_and_bad_rows():
+    rows = ["a,1.00", "b,2.00", "a,3.00", "bad,abc", "b,2.00"]
+    first = report("region,amount\n" + "\n".join(rows) + "\n")
+    second = report("region,amount\n" + "\n".join(rows[3:] + rows[:3]) + "\n")
+    assert first == second, (first, second)
+
+
+# --- REQ-010: the delivered suite runs from one documented command -----------
+
+
+def req_010_run_tests_entry_point_exists():
+    assert os.path.isfile(os.path.join(ROOT, "run-tests.sh")), "run-tests.sh is missing"
+
+
+# --- additional contract checks ----------------------------------------------
+
+
+def req_001_report_uses_only_the_declared_line_shapes():
+    lines = report("region,amount\nnorth,1.00\nnorth,2.00\nbad,abc\n")
+    assert len(lines) == 3, lines
+    assert fields_of(lines[0])[1] == "2", lines
+    assert TOTAL_LINE.match(lines[1]), lines
+    assert SKIPPED_LINE.match(lines[2]), lines
+    assert "" not in lines, lines
+
+
+def req_002_a_two_field_data_row_is_accepted_not_mistaken_for_a_header():
+    expect("region,amount\nnorth,1.00\n", ["north 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"])
+
+
+def req_003_region_with_inner_spaces_stays_one_group():
+    expect(
+        "region,amount\n  New York ,1.00\nNew York,2.00\n",
+        ["New York 2 3.00 1.50", "TOTAL 2 3.00", "SKIPPED 0"],
+    )
+
+
+def req_003_a_numeric_region_is_still_a_region():
+    expect("region,amount\n123,1.00\n007,2.00\n", ["007 1 2.00 2.00", "123 1 1.00 1.00", "TOTAL 2 3.00", "SKIPPED 0"])
+
+
+def req_004_total_line_precedes_the_skipped_line():
+    lines = report("region,amount\nnorth,1.00\nbad,abc\n")
+    assert lines[-2].startswith("TOTAL "), lines
+    assert lines[-1] == "SKIPPED 1", lines
+
+
+def req_005_amount_with_a_surrounding_blank_is_malformed():
+    expect("region,amount\nnorth, 1.00\n", ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
+def req_005_a_quoted_empty_amount_is_malformed():
+    expect('region,amount\nnorth,""\n', ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
+def req_005_a_comma_only_row_is_malformed():
+    expect("region,amount\n,\n", ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
+def req_006_repeated_rows_with_negative_amounts_each_count():
+    expect(
+        "region,amount\neast,-2.50\neast,-2.50\neast,-2.50\n",
+        ["east 3 -7.50 -2.50", "TOTAL 3 -7.50", "SKIPPED 0"],
+    )
+
+
+def req_007_mean_uses_the_exact_sum():
+    # Exact sum 1.005 prints as 1.01, but the mean is 0.5025 -> 0.50.
+    expect("region,amount\nx,1.005\nx,0\n", ["x 2 1.01 0.50", "TOTAL 2 1.01", "SKIPPED 0"])
+
+
+def req_007_sum_rounding_carries_into_the_whole():
+    expect("region,amount\nx,0.995\n", ["x 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"])
+
+
+def req_007_a_large_amount_keeps_its_cents_exact():
+    expect(
+        "region,amount\nx,123456789.125\n",
+        ["x 1 123456789.13 123456789.13", "TOTAL 1 123456789.13", "SKIPPED 0"],
+    )
+
+
+def req_008_a_negative_mean_keeps_its_sign():
+    expect("region,amount\nwest,-9.00\n", ["west 1 -9.00 -9.00", "TOTAL 1 -9.00", "SKIPPED 0"])
+
+
+def req_009_three_permutations_give_the_same_report():
+    rows = ["north,1.00", "south,2.00", "north,3.00", "east,4.00"]
+    reports = {
+        tuple(report("region,amount\n" + "\n".join(order) + "\n"))
+        for order in (rows, rows[2:] + rows[:2], list(reversed(rows)))
+    }
+    assert len(reports) == 1, reports
+
+
+# --- independent recomputation (DIFF-001) ------------------------------------
+
+
+def req_003_printed_aggregates_match_an_independent_recomputation():
+    # DIFF-001: rebuild every region's count, sum and mean from the fixture
+    # rows with decimal.Decimal, independently of summary.py's Fraction
+    # arithmetic, and compare against what the tool printed (REQ-003).
+    from decimal import Decimal, ROUND_HALF_UP
+
+    rows = [
+        ("north", "120.50"),
+        ("north", "99.50"),
+        ("south", "80.00"),
+        ("east", "45.25"),
+        ("North", "10.00"),
+        ("east", "-10.00"),
+        ("east", "30.00"),
+        ("north", "0.005"),
+    ]
+    malformed = ["north,abc", "short", "   ,1.00", "ok,1e3"]
+    text = (
+        "region,amount\n"
+        + "\n".join("%s,%s" % row for row in rows)
+        + "\n"
+        + "\n".join(malformed)
+        + "\n"
+    )
+
+    expected = {}
+    for region, amount in rows:
+        count, total = expected.get(region, (0, Decimal(0)))
+        expected[region] = (count + 1, total + Decimal(amount))
+
+    want = []
+    for region in sorted(expected, key=lambda name: name.encode("utf-8")):
+        count, total = expected[region]
+        mean = total / count
+        want.append(
+            "%s %d %s %s"
+            % (
+                region,
+                count,
+                total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                mean.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
             )
-            total += denominator
-    expected.append("TOTAL %d" % total)
-    out = report("\n".join(rows) + "\n")
-    assert out == expected, out
+        )
+
+    out = report(text)
+    printed = region_lines("\n".join(out))
+    assert printed == want, (printed, want)
+    assert out[-1] == "SKIPPED %d" % len(malformed), out
 
 
-# --- REQ-005: exactly one TOTAL line, the summed denominator ------------------
+def req_004_printed_region_sums_add_up_to_the_total_line():
+    # REL-003 / REQ-004: adding the printed per-region counts and sums must
+    # reproduce the printed TOTAL line (every amount here is exact at 2dp, so
+    # no rounding slack is needed).
+    from decimal import Decimal
 
-
-def req_005_total_is_the_sum_of_printed_denominators():
-    out = report(BASE)
-    denominators = [int(line.split(" ")[2]) for line in suite_lines("\n".join(out))]
-    assert sum(denominators) == 75, denominators
-    assert total_lines("\n".join(out)) == ["TOTAL 75"], out
-
-
-def req_005_there_is_exactly_one_total_line():
-    assert len(total_lines("\n".join(report(BASE)))) == 1
-
-
-def req_005_total_is_the_last_line():
-    assert report(BASE)[-1] == "TOTAL 75"
-
-
-def req_005_header_only_file_total_is_zero():
-    assert report("suite,passed,total\n") == ["TOTAL 0"]
-
-
-def req_005_single_suite_total():
-    assert report("suite,passed,total\na,3,4\n") == ["a 3 4 75.0", "TOTAL 4"]
-
-
-def req_005_total_sums_every_occurrence_of_a_merged_suite():
-    out = report("suite,passed,total\na,1,2\na,1,2\n")
-    assert out == ["a 2 4 50.0", "TOTAL 4"], out
-
-
-def req_005_total_sums_denominators_across_suites():
-    out = report("suite,passed,total\na,1,2\nb,1,3\na,1,2\n")
-    assert out[-1] == "TOTAL 7", out
-
-
-def req_005_total_keeps_decimal_denominators():
-    out = report("suite,passed,total\na,1,2.5\nb,2,3.5\n")
-    assert out == ["a 1 2.5 40.0", "b 2 3.5 57.1", "TOTAL 6"], out
-
-
-# --- AMB-002: repeated suites merge into one summed line ---------------------
-
-
-def amb_002_merge_sums_passed_and_total():
-    assert report(BASE)[0] == "auth-service 50 54 92.6"
-
-
-def amb_002_merge_percentage_uses_the_summed_counts():
-    # first row alone is 100%, last row alone is 0%; merged is 50%.
-    out = report("suite,passed,total\ndup,1,1\ndup,0,1\n")
-    assert out == ["dup 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_002_merge_is_not_the_last_row():
-    out = report("suite,passed,total\ndup,9,10\ndup,1,10\n")
-    assert out == ["dup 10 20 50.0", "TOTAL 20"], out
-
-
-def amb_002_merge_is_not_the_first_row():
-    out = report("suite,passed,total\ndup,1,10\ndup,9,10\n")
-    assert out == ["dup 10 20 50.0", "TOTAL 20"], out
-
-
-def amb_002_merge_over_three_occurrences():
-    out = report("suite,passed,total\ndup,1,2\ndup,1,2\ndup,2,4\n")
-    assert out == ["dup 4 8 50.0", "TOTAL 8"], out
-
-
-def amb_002_merge_still_prints_one_line():
-    lines = suite_lines("\n".join(report("suite,passed,total\ndup,1,2\ndup,1,2\ndup,2,4\n")))
-    assert lines == ["dup 4 8 50.0"], lines
-
-
-def amb_002_merge_keeps_first_appearance_order():
-    out = report("suite,passed,total\nzeta,1,2\nalpha,1,2\nzeta,1,2\n")
-    tokens = [line.split(" ")[0] for line in suite_lines("\n".join(out))]
-    assert tokens == ["zeta", "alpha"], tokens
-
-
-# --- AMB-003: a row that cannot yield a percentage is skipped silently -------
-
-
-def amb_003_non_numeric_passed_row_is_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,abc,10\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_non_numeric_total_row_is_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,5,xyz\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_empty_count_cells_are_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,,2\nalso-bad,1,\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_quoted_non_numeric_counts_are_skipped():
-    out = report('suite,passed,total\nok,1,2\nbad,"n/a",2\n')
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_zero_total_row_is_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,5,0\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_zero_total_written_as_a_decimal_is_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,0,0.0\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_short_row_is_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,5\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_blank_line_is_skipped():
-    out = report("suite,passed,total\nok,1,2\n\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_blank_suite_id_is_skipped():
-    out = report("suite,passed,total\nok,1,2\n,5,10\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_negative_counts_are_skipped():
-    out = report("suite,passed,total\nok,1,2\nbad,-5,10\n")
-    assert out == ["ok 1 2 50.0", "TOTAL 2"], out
-
-
-def amb_003_skipped_rows_do_not_change_any_aggregate():
-    clean = (
-        "suite,passed,total\n"
-        "auth-service,48,50\n"
-        "billing,12,12\n"
-        "search,7,9\n"
-        "auth-service,2,4\n"
+    out = report(
+        "region,amount\n"
+        "north,120.50\n"
+        "south,80.00\n"
+        "north,99.50\n"
+        "east,45.25\n"
+        "east,-10.00\n"
+        "North,10.00\n"
+        "bad,abc\n"
     )
-    dirty = (
-        "suite,passed,total\n"
-        "auth-service,48,50\n"
-        "billing,12,12\n"
-        "search,7,9\n"
-        "broken,abc,3\n"
-        "broken,4\n"
-        "auth-service,2,4\n"
-        "zero,3,0\n"
-    )
-    assert report(dirty) == report(clean), report(dirty)
+    groups = region_lines("\n".join(out))
+    total = TOTAL_LINE.match(out[-2])
+    assert total, out
+    printed_sum = sum((Decimal(fields_of(line)[2]) for line in groups), Decimal(0))
+    printed_count = sum(int(fields_of(line)[1]) for line in groups)
+    assert Decimal(total.group(2)) == printed_sum, (out, printed_sum)
+    assert int(total.group(1)) == printed_count, out
 
 
-def amb_003_a_suite_with_only_bad_rows_is_absent():
-    out = "\n".join(report("suite,passed,total\nok,1,2\nbad,abc,10\n"))
-    assert "bad" not in out.split("\n")[0], out
-    assert len(out.split("\n")) == 2, out
+def req_009_all_permutations_of_a_small_fixture_are_identical():
+    # REL-004 / REQ-009: every ordering of the same multiset, malformed row
+    # included, must produce byte-identical stdout.
+    from itertools import permutations
+
+    rows = ["north,1.00", "south,2.00", "north,3.00", "bad,abc"]
+    expected = None
+    for order in permutations(rows):
+        printed = tuple(report("region,amount\n" + "\n".join(order) + "\n"))
+        if expected is None:
+            expected = printed
+        assert printed == expected, (order, printed, expected)
 
 
-def amb_003_all_rows_bad_still_exits_zero_with_total_zero():
-    assert report("suite,passed,total\nbad,abc,10\nalso-bad,1\n") == ["TOTAL 0"]
-
-
-def amb_003_no_skipped_counter_is_printed():
-    out = "\n".join(report("suite,passed,total\nok,1,2\nbad,abc,10\n"))
-    assert "SKIPPED" not in out.upper(), out
-    assert "skipped" not in out, out
-
-
-# --- the suite -----------------------------------------------------------------
+# --- the suite ---------------------------------------------------------------
 
 
 TESTS = [
@@ -670,75 +784,73 @@ TESTS = [
     ("req_001_extra_argument_is_rejected", req_001_extra_argument_is_rejected),
     ("req_001_missing_file_is_a_stop_error", req_001_missing_file_is_a_stop_error),
     ("req_001_directory_argument_is_a_stop_error", req_001_directory_argument_is_a_stop_error),
+    ("req_001_undecodable_input_is_a_stop_error", req_001_undecodable_input_is_a_stop_error),
     ("req_001_stdin_is_not_consulted", req_001_stdin_is_not_consulted),
     ("req_002_header_row_is_not_a_data_row", req_002_header_row_is_not_a_data_row),
-    ("req_002_declared_column_order_is_the_report", req_002_declared_column_order_is_the_report),
-    ("req_002_reordered_columns_yield_the_same_report", req_002_reordered_columns_yield_the_same_report),
-    ("req_002_header_cells_may_carry_blanks", req_002_header_cells_may_carry_blanks),
-    ("req_002_header_names_are_case_insensitive", req_002_header_names_are_case_insensitive),
-    ("req_002_headerless_sample_is_read_in_declared_order", req_002_headerless_sample_is_read_in_declared_order),
-    ("req_002_header_only_file_reports_an_empty_total", req_002_header_only_file_reports_an_empty_total),
-    ("req_002_a_data_row_is_not_mistaken_for_a_header", req_002_a_data_row_is_not_mistaken_for_a_header),
-    ("req_002_extra_columns_after_the_declared_ones_are_ignored", req_002_extra_columns_after_the_declared_ones_are_ignored),
-    ("req_002_extra_columns_anywhere_do_not_disturb_the_lookup", req_002_extra_columns_anywhere_do_not_disturb_the_lookup),
-    ("req_002_quoted_header_and_fields_are_read_normally", req_002_quoted_header_and_fields_are_read_normally),
+    ("req_002_declared_header_is_accepted", req_002_declared_header_is_accepted),
+    ("req_002_header_is_trimmed_and_case_insensitive", req_002_header_is_trimmed_and_case_insensitive),
+    ("req_002_quoted_header_is_read_normally", req_002_quoted_header_is_read_normally),
+    ("req_002_a_missing_header_is_fatal", req_002_a_missing_header_is_fatal),
+    ("req_002_a_wrong_header_is_fatal", req_002_a_wrong_header_is_fatal),
+    ("req_002_header_only_file_is_an_empty_report", req_002_header_only_file_is_an_empty_report),
+    ("req_002_a_quoted_comma_region_is_one_record", req_002_a_quoted_comma_region_is_one_record),
     ("req_002_crlf_line_endings_are_accepted", req_002_crlf_line_endings_are_accepted),
     ("req_002_utf8_bom_before_the_header_is_ignored", req_002_utf8_bom_before_the_header_is_ignored),
     ("req_002_a_missing_final_newline_is_accepted", req_002_a_missing_final_newline_is_accepted),
-    ("req_002_reordered_header_still_merges_a_repeated_suite", req_002_reordered_header_still_merges_a_repeated_suite),
-    ("req_003_three_distinct_suites_yield_three_lines", req_003_three_distinct_suites_yield_three_lines),
-    ("req_003_a_repeated_suite_yields_one_line", req_003_a_repeated_suite_yields_one_line),
-    ("req_003_suites_are_in_first_appearance_order", req_003_suites_are_in_first_appearance_order),
-    ("req_003_suite_names_are_not_case_folded", req_003_suite_names_are_not_case_folded),
-    ("req_003_suite_names_are_echoed_verbatim", req_003_suite_names_are_echoed_verbatim),
-    ("req_003_non_ascii_suite_names_survive", req_003_non_ascii_suite_names_survive),
-    ("req_003_suite_ids_are_not_trimmed", req_003_suite_ids_are_not_trimmed),
-    ("req_003_a_quoted_comma_stays_one_suite_line", req_003_a_quoted_comma_stays_one_suite_line),
-    ("req_003_each_suite_line_carries_four_fields", req_003_each_suite_line_carries_four_fields),
-    ("req_003_the_report_has_no_other_lines", req_003_the_report_has_no_other_lines),
-    ("req_003_suite_lines_are_emitted_before_the_total", req_003_suite_lines_are_emitted_before_the_total),
-    ("req_004_declared_examples", req_004_declared_examples),
-    ("req_004_percentage_always_has_exactly_one_decimal", req_004_percentage_always_has_exactly_one_decimal),
-    ("req_004_percentage_is_in_points_not_a_fraction", req_004_percentage_is_in_points_not_a_fraction),
-    ("req_004_zero_percent_is_zero_point_zero", req_004_zero_percent_is_zero_point_zero),
-    ("req_004_a_full_pass_is_one_hundred", req_004_a_full_pass_is_one_hundred),
-    ("req_004_thirds_round_to_one_decimal", req_004_thirds_round_to_one_decimal),
-    ("amb_001_exact_half_rounds_up", amb_001_exact_half_rounds_up),
-    ("amb_001_exact_half_rounds_up_near_one_hundred", amb_001_exact_half_rounds_up_near_one_hundred),
-    ("amb_001_exact_half_rounds_up_near_zero", amb_001_exact_half_rounds_up_near_zero),
-    ("amb_001_non_half_values_round_normally", amb_001_non_half_values_round_normally),
-    ("req_004_large_counts_keep_the_exact_ratio", req_004_large_counts_keep_the_exact_ratio),
-    ("req_004_decimal_counts_are_exact", req_004_decimal_counts_are_exact),
-    ("req_004_percentage_grid_matches_half_up", req_004_percentage_grid_matches_half_up),
-    ("req_005_total_is_the_sum_of_printed_denominators", req_005_total_is_the_sum_of_printed_denominators),
-    ("req_005_there_is_exactly_one_total_line", req_005_there_is_exactly_one_total_line),
-    ("req_005_total_is_the_last_line", req_005_total_is_the_last_line),
-    ("req_005_header_only_file_total_is_zero", req_005_header_only_file_total_is_zero),
-    ("req_005_single_suite_total", req_005_single_suite_total),
-    ("req_005_total_sums_every_occurrence_of_a_merged_suite", req_005_total_sums_every_occurrence_of_a_merged_suite),
-    ("req_005_total_sums_denominators_across_suites", req_005_total_sums_denominators_across_suites),
-    ("req_005_total_keeps_decimal_denominators", req_005_total_keeps_decimal_denominators),
-    ("amb_002_merge_sums_passed_and_total", amb_002_merge_sums_passed_and_total),
-    ("amb_002_merge_percentage_uses_the_summed_counts", amb_002_merge_percentage_uses_the_summed_counts),
-    ("amb_002_merge_is_not_the_last_row", amb_002_merge_is_not_the_last_row),
-    ("amb_002_merge_is_not_the_first_row", amb_002_merge_is_not_the_first_row),
-    ("amb_002_merge_over_three_occurrences", amb_002_merge_over_three_occurrences),
-    ("amb_002_merge_still_prints_one_line", amb_002_merge_still_prints_one_line),
-    ("amb_002_merge_keeps_first_appearance_order", amb_002_merge_keeps_first_appearance_order),
-    ("amb_003_non_numeric_passed_row_is_skipped", amb_003_non_numeric_passed_row_is_skipped),
-    ("amb_003_non_numeric_total_row_is_skipped", amb_003_non_numeric_total_row_is_skipped),
-    ("amb_003_empty_count_cells_are_skipped", amb_003_empty_count_cells_are_skipped),
-    ("amb_003_quoted_non_numeric_counts_are_skipped", amb_003_quoted_non_numeric_counts_are_skipped),
-    ("amb_003_zero_total_row_is_skipped", amb_003_zero_total_row_is_skipped),
-    ("amb_003_zero_total_written_as_a_decimal_is_skipped", amb_003_zero_total_written_as_a_decimal_is_skipped),
-    ("amb_003_short_row_is_skipped", amb_003_short_row_is_skipped),
-    ("amb_003_blank_line_is_skipped", amb_003_blank_line_is_skipped),
-    ("amb_003_blank_suite_id_is_skipped", amb_003_blank_suite_id_is_skipped),
-    ("amb_003_negative_counts_are_skipped", amb_003_negative_counts_are_skipped),
-    ("amb_003_skipped_rows_do_not_change_any_aggregate", amb_003_skipped_rows_do_not_change_any_aggregate),
-    ("amb_003_a_suite_with_only_bad_rows_is_absent", amb_003_a_suite_with_only_bad_rows_is_absent),
-    ("amb_003_all_rows_bad_still_exits_zero_with_total_zero", amb_003_all_rows_bad_still_exits_zero_with_total_zero),
-    ("amb_003_no_skipped_counter_is_printed", amb_003_no_skipped_counter_is_printed),
+    ("req_003_sample_report", req_003_sample_report),
+    ("req_003_three_distinct_regions_yield_three_lines", req_003_three_distinct_regions_yield_three_lines),
+    ("req_003_exactly_one_line_per_region", req_003_exactly_one_line_per_region),
+    ("req_003_regions_are_sorted_by_utf8_bytes", req_003_regions_are_sorted_by_utf8_bytes),
+    ("req_003_regions_are_trimmed_before_grouping_and_printing", req_003_regions_are_trimmed_before_grouping_and_printing),
+    ("req_003_regions_are_case_sensitive", req_003_regions_are_case_sensitive),
+    ("req_003_non_ascii_regions_survive", req_003_non_ascii_regions_survive),
+    ("req_003_count_is_the_number_of_accepted_rows_in_the_group", req_003_count_is_the_number_of_accepted_rows_in_the_group),
+    ("req_003_sum_and_mean_have_exactly_two_decimals", req_003_sum_and_mean_have_exactly_two_decimals),
+    ("req_003_mean_is_sum_over_count", req_003_mean_is_sum_over_count),
+    ("req_004_there_is_exactly_one_total_line", req_004_there_is_exactly_one_total_line),
+    ("req_004_total_line_shape_and_value", req_004_total_line_shape_and_value),
+    ("req_004_header_only_file_totals_zero", req_004_header_only_file_totals_zero),
+    ("req_004_total_count_is_the_sum_of_region_counts", req_004_total_count_is_the_sum_of_region_counts),
+    ("req_004_total_sum_is_the_sum_of_the_accepted_amounts", req_004_total_sum_is_the_sum_of_the_accepted_amounts),
+    ("req_004_total_includes_every_duplicate_row", req_004_total_includes_every_duplicate_row),
+    ("req_005_a_non_numeric_amount_is_counted_and_excluded", req_005_a_non_numeric_amount_is_counted_and_excluded),
+    ("req_005_every_malformed_shape_is_counted", req_005_every_malformed_shape_is_counted),
+    ("req_005_clean_file_prints_skipped_zero", req_005_clean_file_prints_skipped_zero),
+    ("req_005_skipped_line_is_last_and_appears_once", req_005_skipped_line_is_last_and_appears_once),
+    ("req_005_all_rows_malformed_still_exits_zero", req_005_all_rows_malformed_still_exits_zero),
+    ("req_005_malformed_rows_do_not_change_any_aggregate", req_005_malformed_rows_do_not_change_any_aggregate),
+    ("req_006_identical_rows_each_count", req_006_identical_rows_each_count),
+    ("req_006_three_identical_rows_each_count", req_006_three_identical_rows_each_count),
+    ("req_006_no_de_duplication", req_006_no_de_duplication),
+    ("req_007_mean_of_ten_thirds_is_three_point_three_three", req_007_mean_of_ten_thirds_is_three_point_three_three),
+    ("req_007_two_point_zero_zero_five_rounds_up", req_007_two_point_zero_zero_five_rounds_up),
+    ("req_007_trailing_zeros_are_always_printed", req_007_trailing_zeros_are_always_printed),
+    ("req_007_half_up_at_the_second_decimal", req_007_half_up_at_the_second_decimal),
+    ("req_007_negative_halves_round_away_from_zero", req_007_negative_halves_round_away_from_zero),
+    ("req_007_repeated_runs_are_byte_identical", req_007_repeated_runs_are_byte_identical),
+    ("req_008_zero_and_negative_amounts_are_included", req_008_zero_and_negative_amounts_are_included),
+    ("req_008_zero_amount_counts", req_008_zero_amount_counts),
+    ("req_008_region_case_is_significant", req_008_region_case_is_significant),
+    ("req_009_shuffled_rows_give_the_same_report", req_009_shuffled_rows_give_the_same_report),
+    ("req_009_permutations_with_duplicates_and_bad_rows", req_009_permutations_with_duplicates_and_bad_rows),
+    ("req_010_run_tests_entry_point_exists", req_010_run_tests_entry_point_exists),
+    ("req_001_report_uses_only_the_declared_line_shapes", req_001_report_uses_only_the_declared_line_shapes),
+    ("req_002_a_two_field_data_row_is_accepted_not_mistaken_for_a_header", req_002_a_two_field_data_row_is_accepted_not_mistaken_for_a_header),
+    ("req_003_region_with_inner_spaces_stays_one_group", req_003_region_with_inner_spaces_stays_one_group),
+    ("req_003_a_numeric_region_is_still_a_region", req_003_a_numeric_region_is_still_a_region),
+    ("req_004_total_line_precedes_the_skipped_line", req_004_total_line_precedes_the_skipped_line),
+    ("req_005_amount_with_a_surrounding_blank_is_malformed", req_005_amount_with_a_surrounding_blank_is_malformed),
+    ("req_005_a_quoted_empty_amount_is_malformed", req_005_a_quoted_empty_amount_is_malformed),
+    ("req_005_a_comma_only_row_is_malformed", req_005_a_comma_only_row_is_malformed),
+    ("req_006_repeated_rows_with_negative_amounts_each_count", req_006_repeated_rows_with_negative_amounts_each_count),
+    ("req_007_mean_uses_the_exact_sum", req_007_mean_uses_the_exact_sum),
+    ("req_007_sum_rounding_carries_into_the_whole", req_007_sum_rounding_carries_into_the_whole),
+    ("req_007_a_large_amount_keeps_its_cents_exact", req_007_a_large_amount_keeps_its_cents_exact),
+    ("req_008_a_negative_mean_keeps_its_sign", req_008_a_negative_mean_keeps_its_sign),
+    ("req_009_three_permutations_give_the_same_report", req_009_three_permutations_give_the_same_report),
+    ("req_003_printed_aggregates_match_an_independent_recomputation", req_003_printed_aggregates_match_an_independent_recomputation),
+    ("req_004_printed_region_sums_add_up_to_the_total_line", req_004_printed_region_sums_add_up_to_the_total_line),
+    ("req_009_all_permutations_of_a_small_fixture_are_identical", req_009_all_permutations_of_a_small_fixture_are_identical),
 ] + UNIT_TESTS
 
 
