@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# summary.sh -- per-suite pass percentages for a CSV of test-run records.
+# summary.sh -- per-region revenue and average order value from a sales CSV.
 #
 # Usage: bash summary.sh <csv>
 #
 # Contract (docs/requirements/intake.yaml, deliverable block):
-#   run:         bash summary.sh {csv}
-#   suite line:  <suite> <passed> <total> <percentage>
-#   total line:  TOTAL <tests>
+#   run:          bash summary.sh {csv}
+#   region line:  <region> <count> <sum> <mean>
+#   total line:   TOTAL <count> <sum>
+#   skipped line: SKIPPED <skipped-count>
 #
 # REQ-001: this shell script at the repository root is the single entry point.
 # It takes the CSV path from $1, reads that file and writes the report to
