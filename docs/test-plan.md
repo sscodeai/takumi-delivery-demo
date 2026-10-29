@@ -19,6 +19,21 @@ install or build step.
 Both files are part of the same TAP run: the integration file imports the unit
 list so a single report and a single exit status cover the whole suite.
 
+Mutation detection runs the same suite against deliberately broken copies of
+`summary.py`:
+
+```
+bash mutation.sh                # human TAP report
+npx stryker run --reporters json  # Stryker JSON report on stdout
+```
+
+The second form is what the delivery review runs; `npx` resolves the shipped
+project-local `node_modules/.bin/stryker`, which forwards to
+`mutation/mutation.py` because the delivery host cannot fetch an npm package.
+Both forms mutate the real source and execute `bash run-tests.sh` for real: a
+survivor means the suite failed to notice a change in behaviour, and the
+command exits non-zero.
+
 ## Acceptance criteria
 
 | Requirement | Acceptance criterion | Checks |

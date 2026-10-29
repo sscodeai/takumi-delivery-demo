@@ -3,4 +3,11 @@ __pycache__/
 *.pyo
 .DS_Store
 reports/
-node_modules/
+
+# The delivery ships exactly one file under node_modules: the project-local
+# `stryker` bin that `npx stryker run` resolves (see node_modules/.bin/stryker
+# and docs/decisions.md). Nothing else is vendored, so everything else stays
+# ignored.
+node_modules/*
+!node_modules/.bin/
+!node_modules/.bin/stryker
