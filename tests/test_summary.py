@@ -15,12 +15,14 @@ report is written to ``reports/tests.tap`` (override with ``TAP_OUT``) and
 echoed to stdout; the process exits 0 only when every check passes.
 """
 
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import redirect_stdout
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -261,6 +263,18 @@ def req_002_header_is_trimmed_and_case_insensitive():
 
 def req_002_quoted_header_is_read_normally():
     expect('"region","amount"\nnorth,1.00\n', ["north 1 1.00 1.00", "TOTAL 1 1.00", "SKIPPED 0"])
+
+
+def req_002_header_does_not_tolerate_inner_whitespace():
+    # Only surrounding blanks are trimmed: the column names themselves must be
+    # exactly `region` and `amount`, so an embedded blank is still a wrong
+    # header (REQ-002). Surrounding blanks are already accepted by
+    # req_002_header_is_trimmed_and_case_insensitive.
+    for text in (
+        "reg ion,amount\nnorth,1.00\n",
+        "region,am ount\nnorth,1.00\n",
+    ):
+        fail_report(text)
 
 
 def req_002_a_missing_header_is_fatal():
@@ -568,6 +582,27 @@ def req_007_cancelling_amounts_do_not_print_a_negative_zero():
     )
 
 
+def req_007_a_mean_at_an_exact_half_rounds_away_from_zero():
+    # AMB-003 applies to the mean as well as the sum: 2.01 / 2 = 1.005, an
+    # exact half, which rounds away from zero; -2.01 / 2 rounds to -1.01.
+    expect("region,amount\nx,2.01\nx,0.00\n", ["x 2 2.01 1.01", "TOTAL 2 2.01", "SKIPPED 0"])
+    expect("region,amount\nx,-2.01\nx,0.00\n", ["x 2 -2.01 -1.01", "TOTAL 2 -2.01", "SKIPPED 0"])
+
+
+def req_007_total_sum_uses_exact_amounts_not_rounded_region_sums():
+    # The total is the exact sum (0.008) rounded half-up to 0.01, not the sum
+    # of the already-rounded region lines (0.00 + 0.00).
+    expect(
+        "region,amount\nx,0.004\ny,0.004\n",
+        [
+            "x 1 0.00 0.00",
+            "y 1 0.00 0.00",
+            "TOTAL 2 0.01",
+            "SKIPPED 0",
+        ],
+    )
+
+
 def req_007_sub_cent_amounts_round_to_zero():
     expect(
         "region,amount\nx,0.004\ny,-0.004\n",
@@ -627,7 +662,33 @@ def req_009_permutations_with_duplicates_and_bad_rows():
 
 
 def req_010_run_tests_entry_point_exists():
-    assert os.path.isfile(os.path.join(ROOT, "run-tests.sh")), "run-tests.sh is missing"
+    runner = os.path.join(ROOT, "run-tests.sh")
+    assert os.path.isfile(runner), "run-tests.sh is missing"
+    assert os.access(runner, os.X_OK), "run-tests.sh is not executable"
+
+
+def req_010_the_runner_exits_non_zero_on_failure():
+    # REQ-010 requires the suite to fail loudly: emit_tap returns non-zero and
+    # marks the failing point `not ok` when any check fails.
+    saved_results = list(RESULTS)
+    saved_tap_out = globals()["TAP_OUT"]
+    captured = io.StringIO()
+    try:
+        RESULTS.clear()
+        RESULTS.append((True, "passing", ""))
+        RESULTS.append((False, "failing", "boom"))
+        globals()["TAP_OUT"] = os.path.join(SANDBOX, "failure.tap")
+        with redirect_stdout(captured):
+            status = emit_tap()
+        with open(globals()["TAP_OUT"], encoding="utf-8") as handle:
+            text = handle.read()
+    finally:
+        globals()["TAP_OUT"] = saved_tap_out
+        RESULTS[:] = saved_results
+    assert status == 1, status
+    assert "not ok 2 - failing" in captured.getvalue(), captured.getvalue()
+    assert "not ok 2 - failing" in text, text
+    assert "# fail 1" in text, text
 
 
 # --- additional contract checks ----------------------------------------------
@@ -686,6 +747,18 @@ def req_005_a_very_long_malformed_field_is_counted_not_crashed():
 
 def req_005_a_comma_only_row_is_malformed():
     expect("region,amount\n,\n", ["TOTAL 0 0.00", "SKIPPED 1"])
+
+
+def req_005_a_plus_signed_amount_is_a_plain_decimal():
+    # REQ-005 defines an amount as an optional sign plus digits, so `+2.50` is
+    # accepted and aggregated normally, not skipped.
+    expect("region,amount\nx,+2.50\n", ["x 1 2.50 2.50", "TOTAL 1 2.50", "SKIPPED 0"])
+
+
+def req_005_text_after_a_closing_quote_is_malformed():
+    # RFC 4180 forbids trailing text after a closing quote. The row is
+    # unparsable, so AMB-001 skips and counts it instead of reading 1.00.
+    expect('region,amount\nnorth,"1.00"x\n', ["TOTAL 0 0.00", "SKIPPED 1"])
 
 
 def req_006_repeated_rows_with_negative_amounts_each_count():
@@ -839,6 +912,7 @@ TESTS = [
     ("req_002_declared_header_is_accepted", req_002_declared_header_is_accepted),
     ("req_002_header_is_trimmed_and_case_insensitive", req_002_header_is_trimmed_and_case_insensitive),
     ("req_002_quoted_header_is_read_normally", req_002_quoted_header_is_read_normally),
+    ("req_002_header_does_not_tolerate_inner_whitespace", req_002_header_does_not_tolerate_inner_whitespace),
     ("req_002_a_missing_header_is_fatal", req_002_a_missing_header_is_fatal),
     ("req_002_a_wrong_header_is_fatal", req_002_a_wrong_header_is_fatal),
     ("req_002_header_only_file_is_an_empty_report", req_002_header_only_file_is_an_empty_report),
@@ -880,6 +954,8 @@ TESTS = [
     ("req_007_half_up_at_the_second_decimal", req_007_half_up_at_the_second_decimal),
     ("req_007_negative_halves_round_away_from_zero", req_007_negative_halves_round_away_from_zero),
     ("req_007_cancelling_amounts_do_not_print_a_negative_zero", req_007_cancelling_amounts_do_not_print_a_negative_zero),
+    ("req_007_a_mean_at_an_exact_half_rounds_away_from_zero", req_007_a_mean_at_an_exact_half_rounds_away_from_zero),
+    ("req_007_total_sum_uses_exact_amounts_not_rounded_region_sums", req_007_total_sum_uses_exact_amounts_not_rounded_region_sums),
     ("req_007_sub_cent_amounts_round_to_zero", req_007_sub_cent_amounts_round_to_zero),
     ("req_007_repeated_runs_are_byte_identical", req_007_repeated_runs_are_byte_identical),
     ("req_008_zero_and_negative_amounts_are_included", req_008_zero_and_negative_amounts_are_included),
@@ -888,6 +964,7 @@ TESTS = [
     ("req_009_shuffled_rows_give_the_same_report", req_009_shuffled_rows_give_the_same_report),
     ("req_009_permutations_with_duplicates_and_bad_rows", req_009_permutations_with_duplicates_and_bad_rows),
     ("req_010_run_tests_entry_point_exists", req_010_run_tests_entry_point_exists),
+    ("req_010_the_runner_exits_non_zero_on_failure", req_010_the_runner_exits_non_zero_on_failure),
     ("req_001_report_uses_only_the_declared_line_shapes", req_001_report_uses_only_the_declared_line_shapes),
     ("req_002_a_two_field_data_row_is_accepted_not_mistaken_for_a_header", req_002_a_two_field_data_row_is_accepted_not_mistaken_for_a_header),
     ("req_003_region_with_inner_spaces_stays_one_group", req_003_region_with_inner_spaces_stays_one_group),
@@ -898,6 +975,8 @@ TESTS = [
     ("req_005_a_quoted_blank_region_is_malformed", req_005_a_quoted_blank_region_is_malformed),
     ("req_005_a_very_long_malformed_field_is_counted_not_crashed", req_005_a_very_long_malformed_field_is_counted_not_crashed),
     ("req_005_a_comma_only_row_is_malformed", req_005_a_comma_only_row_is_malformed),
+    ("req_005_a_plus_signed_amount_is_a_plain_decimal", req_005_a_plus_signed_amount_is_a_plain_decimal),
+    ("req_005_text_after_a_closing_quote_is_malformed", req_005_text_after_a_closing_quote_is_malformed),
     ("req_006_repeated_rows_with_negative_amounts_each_count", req_006_repeated_rows_with_negative_amounts_each_count),
     ("req_007_mean_uses_the_exact_sum", req_007_mean_uses_the_exact_sum),
     ("req_007_sum_rounding_carries_into_the_whole", req_007_sum_rounding_carries_into_the_whole),
