@@ -4,7 +4,7 @@
 # Usage: bash run-tests.sh
 #
 # The suite combines the unit checks in tests/test_units.py with the integration
-# checks in tests/test_summary.py and asserts the contract in
+# checks in tests/test_passrate.py and asserts the contract in
 # docs/requirements/intake.yaml. The report is written to reports/tests.tap and
 # echoed to stdout; this runner exits 0 only when every delivered check passes.
 #
@@ -16,7 +16,7 @@ cd "$(dirname "$0")"
 mkdir -p reports
 
 set +e
-TAP_OUT="${TAP_OUT:-reports/tests.tap}" python3 tests/test_summary.py
+TAP_OUT="${TAP_OUT:-reports/tests.tap}" python3 tests/test_passrate.py
 status=$?
 set -e
 

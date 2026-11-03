@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Mutation harness for the delivered summary tool.
+"""Mutation harness for the delivered pass-rate tool.
 
-Each mutant below is one deliberate defect applied to ``summary.py``. The
+Each mutant below is one deliberate defect applied to ``passrate.py``. The
 harness copies the delivered files into a throwaway directory, applies ONE
 defect, runs the delivered suite (``bash run-tests.sh``) against the mutant and
 records whether the suite noticed. A mutant the suite still passes is a
@@ -39,107 +39,131 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TARGET = "summary.py"
+TARGET = "passrate.py"
 REPORT = os.path.join(ROOT, "reports", "mutation", "mutation.json")
 STRYKER_REPORT = os.path.join(ROOT, "reports", "mutation", "stryker.json")
 DELIVERY_FILES = (
-    "summary.sh",
-    "summary.py",
+    "passrate.sh",
+    "passrate.py",
     "run-tests.sh",
-    os.path.join("tests", "test_summary.py"),
+    os.path.join("tests", "test_passrate.py"),
     os.path.join("tests", "test_units.py"),
 )
 MUTANT_TIMEOUT_S = 300
 SCHEMA_VERSION = "stryker-json-v1"
 BREAK_THRESHOLD = 100
 
-# (mutatorName, description, exact text in summary.py, replacement). Each one
+# (mutatorName, description, exact text in passrate.py, replacement). Each one
 # changes a behaviour the delivered suite is supposed to defend, so a survivor
 # is a real test gap.
 MUTATIONS = (
     (
         "ConditionalBoundary",
-        "AMB-003 half-up: an exact half no longer rounds away from zero",
-        "    if remainder * 2 >= denominator:",
-        "    if remainder * 2 > denominator:",
-    ),
-    (
-        "StringLiteral",
-        "REQ-007 money format: print one decimal instead of exactly two",
-        '    return "%s%d.%02d" % ("-" if negative else "", whole // 100, whole % 100)',
-        '    return "%s%d.%d" % ("-" if negative else "", whole // 100, (whole % 100) // 10)',
+        "AMB-001 half-up: an exact half no longer rounds away from zero",
+        "    if remainder * 2 >= total:",
+        "    if remainder * 2 > total:",
     ),
     (
         "ArithmeticOperator",
-        "REQ-003 mean: divide by a different count than the group's rows",
-        "format_money(amount / count)",
-        "format_money(amount / (count + 1))",
+        "REQ-002 percentage: print a hundredth instead of a tenth",
+        '    return "%d.%d" % (scaled // 10, scaled % 10)',
+        '    return "%d.%d" % (scaled // 10, (scaled % 10) // 10)',
     ),
     (
         "ArithmeticOperator",
-        "REQ-004 TOTAL sum: forget every region's revenue",
-        "        total += amount",
-        "        total += Fraction(0)",
+        "REQ-002 percentage: scale by 100 instead of 1000",
+        "    scaled, remainder = divmod(passed * 1000, total)",
+        "    scaled, remainder = divmod(passed * 100, total)",
     ),
     (
         "ArithmeticOperator",
-        "REQ-004 TOTAL count: count regions instead of accepted rows",
-        '    lines.append("TOTAL %d %s" % (accepted, format_money(total)))',
-        '    lines.append("TOTAL %d %s" % (len(groups), format_money(total)))',
+        "REQ-004 TOTAL: forget every row's passed count",
+        "        passed_sum += passed",
+        "        passed_sum += 0",
     ),
     (
         "ArithmeticOperator",
-        "REQ-005 SKIPPED: never count a malformed row",
+        "REQ-004 TOTAL: sum the passed column as the total",
+        "        total_sum += total",
+        "        total_sum += passed",
+    ),
+    (
+        "ArithmeticOperator",
+        "REQ-006 SKIPPED: never count a malformed row",
         "            skipped += 1",
         "            skipped += 0",
     ),
     (
         "ConditionalBoundary",
-        "REQ-005 field count: accept a row with extra fields",
-        "    if len(record) != 2:",
-        "    if len(record) < 2:",
+        "REQ-006 field count: accept a row with extra fields",
+        "    if len(record) != width:",
+        "    if len(record) < width:",
+    ),
+    (
+        "ConditionalBoundary",
+        "REQ-006 total: accept a zero total instead of skipping the row",
+        "    if total == 0:",
+        "    if total < 0:",
     ),
     (
         "Regex",
-        "REQ-005 amount: accept surrounding blanks as part of a plain decimal",
-        'AMOUNT = re.compile(r"^[+-]?[0-9]+(?:\\.[0-9]+)?$")',
-        'AMOUNT = re.compile(r"^\\s*[+-]?[0-9]+(?:\\.[0-9]+)?\\s*$")',
+        "REQ-006 passed/total: accept a negative integer",
+        'COUNT = re.compile(r"^\\+?[0-9]+$")',
+        'COUNT = re.compile(r"^\\+?-?[0-9]+$")',
+    ),
+    (
+        "ArithmeticOperator",
+        "AMB-002 merge: keep only the last passed count",
+        "            group[0] += passed",
+        "            group[0] = passed",
+    ),
+    (
+        "ArithmeticOperator",
+        "AMB-002 merge: keep only the last total",
+        "            group[1] += total",
+        "            group[1] = total",
+    ),
+    (
+        "MethodExpression",
+        "REQ-003 header: match names without trimming or case folding",
+        '    names = [cell.strip().lower().lstrip("\\ufeff") for cell in header]',
+        "    names = [cell for cell in header]",
+    ),
+    (
+        "ArithmeticOperator",
+        "REQ-003 header: ignore the declared positions of the named columns",
+        "        positions[name] = index",
+        "        positions[name] = len(positions)",
+    ),
+    (
+        "StringLiteral",
+        "REQ-003 headerless sample: read the last two columns in the wrong order",
+        "DEFAULT_ORDER = (SUITE, PASSED, TOTAL)",
+        "DEFAULT_ORDER = (SUITE, TOTAL, PASSED)",
+    ),
+    (
+        "MethodExpression",
+        "REQ-005 suite: group by the untrimmed suite string",
+        "    return record[columns[SUITE]].strip(), passed, total",
+        "    return record[columns[SUITE]], passed, total",
+    ),
+    (
+        "MethodExpression",
+        "REQ-002 ordering: keep insertion order instead of sorting",
+        '    for suite in sorted(groups, key=lambda name: name.encode("utf-8")):',
+        "    for suite in groups:",
     ),
     (
         "BooleanLiteral",
-        "REQ-002 header: accept any first record as a header",
-        "    if tuple(cells) != HEADER:",
-        "    if False:",
+        "REQ-006 SKIPPED: print the line even when nothing was skipped",
+        "    if skipped:",
+        "    if True:",
     ),
     (
         "MethodExpression",
-        "REQ-002 header: match names without trimming or case folding",
-        "    cells = [cell.strip().lower() for cell in record]",
-        "    cells = [cell for cell in record]",
-    ),
-    (
-        "MethodExpression",
-        "REQ-003 region: group by the untrimmed region string",
-        "    region = record[0].strip()",
-        "    region = record[0]",
-    ),
-    (
-        "MethodExpression",
-        "REQ-003/REQ-009 ordering: keep insertion order instead of sorting",
-        '    for region in sorted(groups, key=lambda name: name.encode("utf-8")):',
-        "    for region in groups:",
-    ),
-    (
-        "ArithmeticOperator",
-        "AMB-002 duplicate rows: keep the row count at one per region",
-        "            group[0] += 1",
-        "            group[0] = 1",
-    ),
-    (
-        "ArithmeticOperator",
-        "AMB-002 duplicate rows: keep only the last amount",
-        "            group[1] += amount",
-        "            group[1] = amount",
+        "REQ-003 header: report the header row as a data row",
+        "        data = iterator",
+        "        data = _prepend(first, iterator)",
     ),
 )
 
@@ -218,7 +242,7 @@ def classify(status):
 def measure(original, mutant, timeout):
     """Build one mutant in isolation, run the real suite, report the verdict."""
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="summary-mutant-") as directory:
+    with tempfile.TemporaryDirectory(prefix="passrate-mutant-") as directory:
         build_mutant(directory, original, mutant)
         status = run_suite(directory, timeout)
     return {
@@ -272,7 +296,7 @@ def stryker_report(original, results):
                 "replacement": mutant["replacement"],
                 "location": mutant["location"],
                 "status": result["status"],
-                "statusReason": result["mutant"]["description"],
+                "statusReason": mutant["description"],
                 # The delivered suite is one command (bash run-tests.sh), so a
                 # mutant is measured by exactly one test run.
                 "testsCompleted": 1,

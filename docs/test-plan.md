@@ -1,83 +1,51 @@
-# Test plan and requirement coverage
+# Test plan
 
-Requirement document: `docs/requirements/intake.yaml`.
-Delivered command under test: `bash summary.sh <csv>`.
+Requirement: `docs/requirements/intake.yaml`. Entry point: `bash passrate.sh <csv>`.
 
-## How to run
-
-```
-bash run-tests.sh
-```
-
-The root `run-tests.sh` is the discoverable entry point. It runs the unit
-checks in `tests/test_units.py` and the integration checks in
-`tests/test_summary.py` through one TAP report, writes that report to
-`reports/tests.tap`, echoes it to stdout, and exits non-zero if any check fails.
-The suite needs only `bash` and the Python 3 standard library; there is no
-install or build step.
-
-Both files are part of the same TAP run: the integration file imports the unit
-list so a single report and a single exit status cover the whole suite.
-
-Mutation detection runs the same suite against deliberately broken copies of
-`summary.py`:
-
-```
-bash mutation.sh                # human TAP report
-npx stryker run --reporters json  # Stryker JSON report on stdout
-```
-
-The second form is what the delivery review runs; `npx` resolves the shipped
-project-local `node_modules/.bin/stryker`, which forwards to
-`mutation/mutation.py` because the delivery host cannot fetch an npm package.
-Both forms mutate the real source and execute `bash run-tests.sh` for real: a
-survivor means the suite failed to notice a change in behaviour, and the
-command exits non-zero.
+`bash run-tests.sh` runs `tests/test_units.py` (functions in `passrate.py`) and
+`tests/test_passrate.py` (the real entry point in subprocesses) into one TAP
+report. Every check below is executed on every run.
 
 ## Acceptance criteria
 
-| Requirement | Acceptance criterion | Checks |
+| id | criterion | checks |
 | --- | --- | --- |
-| REQ-001 | `summary.sh` runs with no install/build step, from any cwd and with spaces in the path | `req_001_entry_point_exists`, `req_001_entry_point_is_executable_with_shebang`, `req_001_runs_without_an_install_or_build_step`, `req_001_runs_from_another_working_directory`, `req_001_relative_input_path_resolves_from_cwd`, `req_001_input_path_may_contain_spaces` |
-| REQ-001 | A readable file exits 0 and the report goes to stdout | `req_001_valid_csv_exits_zero`, `req_001_report_goes_to_stdout_not_stderr`, `req_001_process_terminates_on_its_own`, `req_001_stdin_is_not_consulted`, `unit_main_writes_the_report_to_stdout` |
-| REQ-001 | A missing argument, missing file, directory or undecodable file is a non-zero stop with no report lines | `req_001_missing_argument_is_a_usage_error`, `req_001_extra_argument_is_rejected`, `req_001_missing_file_is_a_stop_error`, `req_001_directory_argument_is_a_stop_error`, `req_001_undecodable_input_is_a_stop_error`, `unit_main_rejects_a_wrong_argument_count`, `unit_main_stops_on_unreadable_input`, `unit_main_stops_on_a_permission_denied_input` |
-| REQ-002 | `region,amount` and `Region , Amount` are accepted; the header is never a data row | `req_002_header_row_is_not_a_data_row`, `req_002_declared_header_is_accepted`, `req_002_header_is_trimmed_and_case_insensitive`, `req_002_quoted_header_is_read_normally`, `unit_locate_header_accepts_the_declared_header`, `unit_locate_header_trims_blanks_and_ignores_case` |
-| REQ-002 | A missing or wrong header is fatal with no report lines | `req_002_a_missing_header_is_fatal`, `req_002_a_wrong_header_is_fatal`, `req_002_header_does_not_tolerate_inner_whitespace`, `unit_locate_header_rejects_the_wrong_order`, `unit_locate_header_rejects_other_or_extra_columns`, `unit_locate_header_rejects_a_missing_header`, `unit_main_stops_on_a_missing_or_wrong_header` |
-| REQ-002 | RFC 4180 quoting: a quoted comma region is one record | `req_002_a_quoted_comma_region_is_one_record`, `req_002_a_quoted_region_with_an_escaped_quote_is_one_record`, `req_002_a_quoted_region_is_trimmed_after_quoting`, `req_002_crlf_line_endings_are_accepted`, `req_002_utf8_bom_before_the_header_is_ignored`, `req_002_a_missing_final_newline_is_accepted` |
-| REQ-003 | One line per distinct region, sorted by UTF-8 bytes | `req_003_sample_report`, `req_003_three_distinct_regions_yield_three_lines`, `req_003_exactly_one_line_per_region`, `req_003_regions_are_sorted_by_utf8_bytes`, `req_003_regions_are_case_sensitive`, `req_003_non_ascii_regions_survive` |
-| REQ-003 | Region is trimmed before grouping/printing; case is significant | `req_003_regions_are_trimmed_before_grouping_and_printing`, `req_003_regions_are_case_sensitive`, `unit_parse_row_trims_the_region`, `unit_parse_row_keeps_region_case_and_inner_spaces` |
-| REQ-003 | `<count> <sum> <mean>` are the group's row count, exact sum and mean | `req_003_count_is_the_number_of_accepted_rows_in_the_group`, `req_003_sum_and_mean_have_exactly_two_decimals`, `req_003_mean_is_sum_over_count`, `req_003_printed_aggregates_match_an_independent_recomputation`, `unit_summarise_groups_sorts_and_prints_the_sample` |
-| REQ-004 | Exactly one `TOTAL <count> <sum>`, after the region lines, always printed | `req_004_there_is_exactly_one_total_line`, `req_004_total_line_shape_and_value`, `req_004_header_only_file_totals_zero`, `unit_summarise_reports_an_empty_report_for_a_header_only_file` |
-| REQ-004 | Per-region counts and sums add up to TOTAL | `req_004_total_count_is_the_sum_of_region_counts`, `req_004_total_sum_is_the_sum_of_the_accepted_amounts`, `req_004_printed_region_sums_add_up_to_the_total_line`, `req_004_total_includes_every_duplicate_row` |
-| REQ-005 | A malformed row is skipped, excluded and counted on `SKIPPED` (AMB-001) | `req_005_a_non_numeric_amount_is_counted_and_excluded`, `req_005_every_malformed_shape_is_counted`, `req_005_malformed_rows_do_not_change_any_aggregate`, `req_005_all_rows_malformed_still_exits_zero`, `req_005_an_unclosed_quote_row_is_malformed`, `req_005_text_after_a_closing_quote_is_malformed`, `req_005_a_quoted_blank_region_is_malformed`, `req_005_a_very_long_malformed_field_is_counted_not_crashed`, `unit_parse_row_skips_every_malformed_row`, `unit_summarise_counts_malformed_rows_without_aggregating_them`, `unit_read_records_turns_a_csv_error_into_a_malformed_record`, `unit_read_records_turns_an_unclosed_quote_into_a_malformed_record` |
-| REQ-005 | An amount is a plain decimal with an optional sign, so `+2.50` is accepted | `req_005_a_plus_signed_amount_is_a_plain_decimal`, `unit_parse_amount_accepts_plain_decimals`, `unit_parse_amount_rejects_everything_else` |
-| REQ-005 | `SKIPPED` appears once, after `TOTAL`, and is `0` for a clean file | `req_005_skipped_line_is_last_and_appears_once`, `req_005_clean_file_prints_skipped_zero` |
-| REQ-006 | Identical rows each count as their own order (AMB-002) | `req_006_identical_rows_each_count`, `req_006_three_identical_rows_each_count`, `req_006_no_de_duplication`, `unit_summarise_keeps_every_duplicate_row` |
-| REQ-007 | Exactly two decimals, half-up, exact arithmetic, reproducible | `req_007_mean_of_ten_thirds_is_three_point_three_three`, `req_007_two_point_zero_zero_five_rounds_up`, `req_007_trailing_zeros_are_always_printed`, `req_007_half_up_at_the_second_decimal`, `req_007_negative_halves_round_away_from_zero`, `req_007_a_mean_at_an_exact_half_rounds_away_from_zero`, `req_007_total_sum_uses_exact_amounts_not_rounded_region_sums`, `req_007_cancelling_amounts_do_not_print_a_negative_zero`, `req_007_sub_cent_amounts_round_to_zero`, `req_007_repeated_runs_are_byte_identical`, `unit_format_money_rounds_an_exact_half_away_from_zero`, `unit_format_money_rounds_negative_halves_away_from_zero`, `unit_format_money_truncates_below_a_half`, `unit_format_money_always_prints_two_decimals`, `unit_format_money_rounds_sub_cent_values_to_zero`, `unit_summarise_never_prints_a_negative_zero` |
-| REQ-008 | Zero and negative amounts are valid; region case matters | `req_008_zero_and_negative_amounts_are_included`, `req_008_zero_amount_counts`, `req_008_region_case_is_significant` |
-| REQ-009 | Shuffling rows leaves the report byte-identical | `req_009_shuffled_rows_give_the_same_report`, `req_009_permutations_with_duplicates_and_bad_rows`, `req_009_all_permutations_of_a_small_fixture_are_identical` |
-| REQ-010 | One documented command runs the delivered suite | `req_010_run_tests_entry_point_exists`, `req_010_the_runner_exits_non_zero_on_failure`, and `bash run-tests.sh` itself |
+| REQ-001 | `bash passrate.sh <sample.csv>` exits 0 | `req_001_exits_zero_and_writes_nothing_to_stderr`, `req_001_declared_sample_report_is_exact` |
+| REQ-001 | the script is at the repository root and takes the path as `$1` | `req_001_declared_sample_report_is_exact` (judge-style path substitution), `req_001_no_argument_is_a_usage_error` |
+| REQ-001 | a missing or unreadable path exits non-zero with a stderr diagnostic | `req_001_missing_input_path_is_a_fatal_error`, `req_001_an_unreadable_path_is_a_fatal_error` |
+| REQ-001 | nothing on stdout outside the declared shapes | `req_001_stdout_carries_only_declared_shapes`, `extra_a_quoted_suite_containing_a_comma_stays_one_line` |
+| REQ-002 | 48/50 prints `96.0`; 17/20 prints `85.0` | `req_002_percentage_has_exactly_one_fractional_digit` |
+| REQ-002 | whole percentages keep one fractional digit (`100.0`, `0.0`) | `req_002_percentage_has_exactly_one_fractional_digit` |
+| REQ-002 | the percentage is derived from the same line's printed counts | `req_002_percentage_is_derived_from_the_printed_counts`, `rel_001_every_percentage_matches_its_own_printed_counts` |
+| REQ-003 | a `total,suite,passed` header yields the sample report | `req_003_reordered_header_yields_the_sample_report` |
+| REQ-003 | the header row is never reported as data | `req_003_the_header_row_is_never_reported` |
+| REQ-003 | a header missing `suite`/`passed`/`total` exits non-zero naming it | `req_003_a_missing_column_is_fatal_and_named`, `unit_resolve_columns_names_each_missing_column` |
+| REQ-003 | extra columns are tolerated | `req_003_extra_columns_are_ignored`, `unit_resolve_columns_ignores_extra_columns` |
+| REQ-003 | header names are trimmed and case-insensitive | `req_003_header_names_are_trimmed_and_case_insensitive`, `unit_resolve_columns_ignores_case_and_blanks` |
+| REQ-004 | exactly one totals line, after the suite lines | `req_004_totals_line_is_printed_once_and_last_of_the_aggregates`, `req_001_stdout_carries_only_declared_shapes` |
+| REQ-004 | the declared sample totals read `TOTAL 165 174` | `req_004_declared_sample_totals_are_165_and_174` |
+| REQ-004 | totals are printed for a single suite | `req_004_a_single_suite_still_prints_totals` |
+| REQ-005 | two `auth` rows (48/50, 1/1) print `auth 49 51 96.1` | `req_005_repeated_suite_rows_merge_into_one_line` |
+| REQ-005 | one line per distinct suite, not per row | `req_005_line_count_is_distinct_suites_not_rows` |
+| REQ-006 | an unparsable `passed` produces no suite line and `SKIPPED 1` | `req_006_an_unparsable_passed_is_skipped_and_counted` |
+| REQ-006 | a clean file prints no `SKIPPED` line | `req_006_a_clean_input_prints_no_skipped_line` |
+| REQ-006 | totals sum only counted rows | `req_006_skipped_rows_are_excluded_from_the_totals`, `diff_001_totals_are_the_sum_of_the_counted_rows` |
+| REQ-006 | a suite whose only row has `total=0` gets no line and is skipped | `req_006_a_zero_total_suite_gets_no_line_and_is_skipped`, `unit_parse_row_rejects_unusable_rows` |
 
-## Ambiguity decisions
+## Decisions
 
-| Ambiguity | Chosen behaviour | Checks |
-| --- | --- | --- |
-| AMB-001 | `skip-count`: skip the malformed row, exclude it, count it on `SKIPPED` | `req_005_*`, `unit_parse_row_skips_every_malformed_row`, `unit_summarise_counts_malformed_rows_without_aggregating_them`, `unit_read_records_turns_a_csv_error_into_a_malformed_record`, `unit_read_records_turns_an_unclosed_quote_into_a_malformed_record` |
-| AMB-002 | `merge`: identical rows each count as their own order | `req_006_*`, `unit_summarise_keeps_every_duplicate_row` |
-| AMB-003 | `half-up`: an exact half rounds away from zero at two decimals | `req_007_half_up_at_the_second_decimal`, `req_007_two_point_zero_zero_five_rounds_up`, `req_007_negative_halves_round_away_from_zero`, `req_007_a_mean_at_an_exact_half_rounds_away_from_zero`, `unit_format_money_rounds_an_exact_half_away_from_zero`, `unit_format_money_rounds_negative_halves_away_from_zero` |
+| decision | checks |
+| --- | --- |
+| AMB-001 half-up | `amb_001_an_exact_half_rounds_away_from_zero`, `amb_001_a_stored_half_at_two_decimals_rounds_up`, `amb_001_a_value_just_below_a_half_rounds_down`, `unit_format_percentage_rounds_exact_half_away_from_zero`, `unit_format_percentage_rounds_a_value_just_below_a_half_down` |
+| AMB-002 merge | `req_005_repeated_suite_rows_merge_into_one_line`, `amb_002_merge_sums_both_counts_and_rows`, `unit_summarise_merges_a_repeated_suite` |
+| AMB-003 skip-count | `req_006_skipped_rows_are_excluded_from_the_totals`, `amb_003_skip_count_counts_each_unusable_row_once`, `unit_summarise_reports_skipped_only_when_something_was_skipped` |
+| REL-001 derived-ratio | `rel_001_every_percentage_matches_its_own_printed_counts` |
+| DIFF-001 independent recomputation | `diff_001_an_independent_pass_yields_the_same_lines`, `diff_001_totals_are_the_sum_of_the_counted_rows` |
 
-## Relation coverage
+## Mutation
 
-* `REL-001` (malformed-row-accounting, AMB-001) is checked by comparing a dirty
-  fixture with its clean twin: the aggregates match and only `SKIPPED` grows.
-* `REL-002` (duplicate-resolution, AMB-002) is checked by repeating identical
-  rows and asserting count and sum both grow.
-* `REL-003` (additivity) is checked by summing the printed per-region counts and
-  amounts against the printed `TOTAL` line.
-* `REL-004` (row-order invariance) is checked by running the same multiset of
-  rows in different orders and comparing stdout byte-for-byte.
-* `DIFF-001` (independent aggregation, AMB-003) is checked by recomputing money
-  with `decimal.Decimal` in `req_004_total_sum_is_the_sum_of_the_accepted_amounts`,
-  by recomputing every region's count/sum/mean independently in
-  `req_003_printed_aggregates_match_an_independent_recomputation`, and by direct
-  half-up boundary cases in the `req_007_*` and `unit_format_money_*` checks.
+`bash mutation.sh` (equivalently `npx stryker run --reporters json`) applies
+each defect in `mutation/mutation.py` to `passrate.py` in a throwaway copy and
+runs the suite above against it. A survivor fails the harness. The 18 delivered
+mutants cover AMB-001, AMB-002, AMB-003 and the REQ-002/003/004/005/006
+behaviours they depend on.

@@ -1,7 +1,8 @@
 # Decisions and where they live
 
-Requirement: `docs/requirements/intake.yaml` (confirmed 2026-10-29 under
-`docs/authorizations/SA-002.yaml`). Delivery: `bash summary.sh {csv}`.
+Requirement: `docs/requirements/intake.yaml` (confirmed 2026-11-03 under the
+standing authorization `docs/authorizations/SA-002.yaml`). Delivery:
+`bash passrate.sh {csv}`.
 
 Every `AMB-nnn` in that document is recorded here with the answer taken and the
 `file:line` anchors that enact it. `grep -rn 'AMB-00' .` finds the same one-line
@@ -14,22 +15,19 @@ standing authorization recorded in its front matter (`method:
 standing-authorization`, `ref: docs/authorizations/SA-002.yaml`, signed by SS,
 expires 2026-11-11). They are **DEFAULTED** — a machine's guess, not a person's
 choice — and are therefore the rows a reviewer may most plausibly want to
-revisit. All three are blocking decisions; REL-001, REL-002 and DIFF-001
-mechanise them.
+revisit. REL-001 and DIFF-001 mechanise AMB-001; REQ-005 and REQ-006 carry
+AMB-002 and AMB-003 as requirement text.
 
 | id | question (one line) | answer | provenance | anchored at |
 | --- | --- | --- | --- | --- |
-| AMB-001 | What should the tool do with a data row it cannot parse (wrong field count, empty region, non-numeric amount)? | `skip-count`: skip the row, exclude it from every aggregate, and report it on a `SKIPPED` line | DEFAULTED (`default:`) — mechanised by REL-001 | `summary.py:154` (rule comment), `summary.py:157` (`skipped += 1`), `summary.py:187` (the `SKIPPED` line); malformed definition at `summary.py:83`, `summary.py:86`, `summary.py:88`; RFC 4180 failures become malformed rows at `summary.py:125`; mutation that must be noticed: `mutation/mutation.py:93`; tests `tests/test_units.py:168`, `tests/test_units.py:444`, `tests/test_summary.py:460`, `tests/test_summary.py:513` |
-| AMB-002 | When two data rows are identical (same region and same amount), how are they treated? | `merge`: every occurrence counts as its own order | DEFAULTED (`default:`) — mechanised by REL-002 | `summary.py:164` (rule comment), `summary.py:167` (row count grows), `summary.py:168` (sum adds each amount); mutations that must be noticed: `mutation/mutation.py:134`, `mutation/mutation.py:140`; tests `tests/test_units.py:208`, `tests/test_summary.py:530` |
-| AMB-003 | How are printed sums and means rounded to two decimal places? | `half-up`: round half away from zero | DEFAULTED (`default:`) — mechanised by DIFF-001 | `summary.py:106` (rule comment), `summary.py:109` (the `>=` that sends an exact half up), `summary.py:113` (exactly two printed decimals); mutation that must be noticed: `mutation/mutation.py:62`; tests `tests/test_units.py:109`, `tests/test_summary.py:567` |
+| AMB-001 | How is the one-decimal percentage rounded on an exact half? | `half-up`: round half away from zero, so 96.05 becomes 96.1 | DEFAULTED (`default:`) — mechanised by REL-001 / DIFF-001 | rule comment `passrate.py:136`, exact integer scaling `passrate.py:135`, the `>=` that sends a half up `passrate.py:139`, exactly one printed decimal `passrate.py:141`; tests `tests/test_passrate.py:399`, `tests/test_passrate.py:405`, `tests/test_passrate.py:411`, `tests/test_units.py:146` |
+| AMB-002 | When the same suite name appears on several rows, which occurrence wins? | `merge`: every row of that suite counts, so passed and total are summed into one line | DEFAULTED (`default:`) — requirement text REQ-005 | rule comment `passrate.py:205`, passed sum `passrate.py:207`, total sum `passrate.py:208`; one line printed per distinct suite at `passrate.py:215`; tests `tests/test_passrate.py:347`, `tests/test_passrate.py:420`, `tests/test_units.py:165` |
+| AMB-003 | What happens to a data row that cannot yield a percentage? | `skip-count`: skip the row, exclude it from the totals, report it on a `SKIPPED` line | DEFAULTED (`default:`) — requirement text REQ-006 | malformed definition `passrate.py:110` (field count `passrate.py:116`, non-integer/negative counts `passrate.py:120`, zero total `passrate.py:122`), rule comment `passrate.py:195`, `skipped += 1` `passrate.py:198`, the `SKIPPED` line `passrate.py:228`; tests `tests/test_passrate.py:373`, `tests/test_passrate.py:430`, `tests/test_units.py:186` |
 
 ## Where the declared relations are checked
 
 | relation | checked by |
 | --- | --- |
-| REL-001 malformed-row-accounting (AMB-001) | `tests/test_summary.py` `req_005_*` (dirty fixture vs. clean twin: aggregates identical, only `SKIPPED` grows) |
-| REL-002 duplicate-resolution (AMB-002) | `tests/test_summary.py` `req_006_*` (identical rows grow count and sum) |
-| REL-003 additivity | `tests/test_summary.py` `req_004_total_*` (printed region counts/sums sum to the printed `TOTAL`) |
-| REL-004 row-order-invariance | `tests/test_summary.py` `req_009_*` (shuffles and permutations compared byte-for-byte) |
-| DIFF-001 independent-aggregation (AMB-003) | `req_003_printed_aggregates_match_an_independent_recomputation`, `req_004_total_sum_is_the_sum_of_the_accepted_amounts`, `req_007_*` |
-| mutation-detection | `npx stryker run --reporters json` → `node_modules/.bin/stryker` → `mutation/mutation.py` (real mutants on `summary.py`, real `bash run-tests.sh` runs; exit non-zero on a survivor) |
+| REL-001 derived-ratio (AMB-001) | `tests/test_passrate.py` `rel_001_every_percentage_matches_its_own_printed_counts` (recomputes each printed percentage from that line's own printed passed/total, half-up) |
+| DIFF-001 independent recomputation (AMB-001) | `tests/test_passrate.py` `diff_001_an_independent_pass_yields_the_same_lines`, `diff_001_totals_are_the_sum_of_the_counted_rows` |
+| mutation-detection | `npx stryker run --reporters json` → `node_modules/.bin/stryker` → `mutation/mutation.py` (18 mutants on `passrate.py`, real `bash run-tests.sh` runs; exit non-zero on a survivor) |
