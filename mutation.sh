@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# mutation.sh -- mutation-detection harness for the delivered summary tool.
+# mutation.sh -- mutation-detection harness for the delivered pass-rate tool.
 #
 # Usage: bash mutation.sh
 #
-# Applies one deliberate defect at a time to summary.py, runs the delivered test
+# Applies one deliberate defect at a time to passrate.py, runs the delivered test
 # suite against each mutant, and writes reports/mutation/mutation.json:
 #
 #   {"total": <mutants measured>,
