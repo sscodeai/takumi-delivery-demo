@@ -215,6 +215,20 @@ def req_001_no_argument_is_a_usage_error():
     assert proc.stderr.strip()
 
 
+def req_001_entry_point_sits_at_the_repository_root():
+    assert os.path.isfile(SCRIPT), "passrate.sh must exist at the repository root"
+    assert os.path.dirname(SCRIPT) == ROOT, SCRIPT
+
+
+def req_001_reads_the_path_substituted_as_the_first_argument():
+    # A judge replaces {csv} with its own fixture path and may invoke the
+    # script from any working directory. Only $1 names the fixture.
+    path = csv_file(SAMPLE, "judge-fixture.csv")
+    proc = run([path], cwd=SANDBOX)
+    assert proc.returncode == 0, "exit %d, stderr %r" % (proc.returncode, proc.stderr)
+    assert lines_of(proc.stdout) == SAMPLE_REPORT, proc.stdout
+
+
 def req_001_stdout_carries_only_declared_shapes():
     text = (
         "suite,passed,total\n"
@@ -341,6 +355,21 @@ def req_004_a_single_suite_still_prints_totals():
     expect("suite,passed,total\nonly,2,3\n", ["only 2 3 66.7", "TOTAL 2 3"])
 
 
+def req_004_totals_follow_the_suite_lines_even_when_rows_were_skipped():
+    lines = report(
+        "suite,passed,total\n"
+        "alpha,1,2\n"
+        "broken,oops,5\n"
+        "beta,3,4\n"
+    )
+    assert lines == [
+        "alpha 1 2 50.0",
+        "beta 3 4 75.0",
+        "TOTAL 4 6",
+        "SKIPPED 1",
+    ], lines
+
+
 # --- REQ-005: repeated suites merge ------------------------------------------
 
 
@@ -354,6 +383,11 @@ def req_005_line_count_is_distinct_suites_not_rows():
     lines = report(text)
     assert len(suite_lines(lines)) == 3, lines
     assert lines[:3] == ["a 2 4 50.0", "b 3 6 50.0", "c 1 2 50.0"], lines
+
+
+def req_005_merge_uses_valid_rows_only_for_a_repeated_suite():
+    lines = report("suite,passed,total\nauth,48,50\nauth,1,1\nauth,nope,9\n")
+    assert lines == ["auth 49 51 96.1", "TOTAL 49 51", "SKIPPED 1"], lines
 
 
 # --- REQ-006: malformed rows are skipped and counted -------------------------
@@ -414,6 +448,12 @@ def amb_001_a_value_just_below_a_half_rounds_down():
     assert lines[0] == "below 2401 2500 96.0", lines
 
 
+def amb_001_a_half_below_one_percent_rounds_up_to_one_decimal():
+    # 1/2000 = 0.05% -> 0.1 (truncate would print 0.0)
+    lines = report("suite,passed,total\ntiny,1,2000\n")
+    assert lines[0] == "tiny 1 2000 0.1", lines
+
+
 # --- AMB-002 / AMB-003 -------------------------------------------------------
 
 
@@ -437,6 +477,24 @@ def amb_003_skip_count_counts_each_unusable_row_once():
         "d,0,0\n"
     )
     assert lines == ["a 1 2 50.0", "TOTAL 1 2", "SKIPPED 4"], lines
+
+
+def amb_003_every_unusable_row_shape_is_skipped_and_counted():
+    # The AMB-003 answer lists each malformed shape; every one of them must
+    # produce no suite line, contribute nothing to TOTAL, and be counted once.
+    cases = {
+        "too-few-fields": "broken,1\n",
+        "too-many-fields": "broken,1,2,extra\n",
+        "non-integer-passed": "broken,x,2\n",
+        "non-integer-total": "broken,1,x\n",
+        "negative-passed": "broken,-1,2\n",
+        "negative-total": "broken,1,-2\n",
+        "zero-total": "broken,0,0\n",
+        "blank-passed": "broken,,2\n",
+    }
+    for name, row in cases.items():
+        lines = report("suite,passed,total\n" + row, "%s.csv" % name)
+        assert lines == ["TOTAL 0 0", "SKIPPED 1"], (name, lines)
 
 
 # --- REL-001 / DIFF-001: independent recomputation ---------------------------

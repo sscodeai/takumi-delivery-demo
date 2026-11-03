@@ -159,6 +159,11 @@ def unit_format_percentage_rounds_a_value_just_below_a_half_down():
     assert passrate.format_percentage(1, 7) == "14.3"
 
 
+def unit_format_percentage_rounds_a_half_below_one_percent_up():
+    # 1/2000 = 0.05% -> 0.1 (the truncate option would print 0.0)
+    assert passrate.format_percentage(1, 2000) == "0.1"
+
+
 # --- summarise: the report built from records --------------------------------
 
 
@@ -198,6 +203,20 @@ def unit_summarise_rejects_an_empty_file():
     except passrate.InputError:
         return
     raise AssertionError("an empty file must be a fatal input error")
+
+
+def unit_summarise_counts_each_malformed_shape_once():
+    for row in (
+        ["auth", "1"],  # wrong field count
+        ["auth", "1", "2", "extra"],  # wrong field count
+        ["auth", "x", "2"],  # non-integer passed
+        ["auth", "1", "x"],  # non-integer total
+        ["auth", "-1", "2"],  # negative passed
+        ["auth", "1", "-2"],  # negative total
+        ["auth", "0", "0"],  # total is zero
+    ):
+        lines = passrate.summarise([["suite", "passed", "total"], row])
+        assert lines == ["TOTAL 0 0", "SKIPPED 1"], (row, lines)
 
 
 UNIT_TESTS = [
