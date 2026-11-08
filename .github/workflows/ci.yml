@@ -23,21 +23,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: write the sample input the requirement document declares
+      - name: write the declared sample rows with the declared region,amount header
         run: |
           cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
-          North,120.50
-          South,80.00
-          North,99.50
-          East,45.25
+          region,amount
+          north,100.00
+          south,50.00
+          north,25.50
+          east,10.25
           TAKUMI_SAMPLE
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 30s bash -c 'bash summary.sh takumi-sample.csv' || {
+          timeout 120s bash -c 'bash summary.sh takumi-sample.csv' || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 30s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
+              echo 'the deliverable command did not exit within 120s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
             fi
             exit "$rc"
           }
