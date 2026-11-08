@@ -1,9 +1,5 @@
-status,assignee
-open,alice
-open,alice
-closed,alice
-open,alice
-closed,bob
-closed,bob
-closed,bob
-open,carol
+amount,region
+120.50,North
+80.25,South
+99.50,North
+45.00,East

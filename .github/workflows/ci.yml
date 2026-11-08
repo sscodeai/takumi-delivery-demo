@@ -19,25 +19,25 @@ jobs:
           elif [ -f run-tests.sh ]; then bash run-tests.sh 2>&1 | tail -60;
           elif ls *.test.mjs >/dev/null 2>&1; then node --test *.test.mjs 2>&1 | tail -60;
           else echo "no test command found in this project" >&2; exit 1; fi
-  mutation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: run the delivered mutation check
-        run: |
-          set -o pipefail
-          bash mutation/run.sh 2>&1 | tail -60
   deliverable:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: write the sample input the requirement document declares
+        run: |
+          cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
+          North,120.50
+          South,80.25
+          North,99.50
+          East,45.00
+          TAKUMI_SAMPLE
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 30s bash -c 'bash summary.sh sample/tickets.csv' || {
+          timeout 10s bash -c 'bash summary.sh takumi-sample.csv' || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 30s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh sample/tickets.csv' >&2
+              echo 'the deliverable command did not exit within 10s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh takumi-sample.csv' >&2
             fi
             exit "$rc"
           }
