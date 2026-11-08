@@ -25,6 +25,8 @@ import hashlib
 import os
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import List, Tuple
 
@@ -124,6 +126,32 @@ def test_nonexistent_input_is_an_error_with_empty_stdout() -> None:
     result = run_tool(str(FIXTURES / "does-not-exist.csv"))
     assert result.returncode != 0, "a missing input file must be an error"
     assert result.stdout == "", "a failed run must not print a report"
+
+
+def test_typical_100k_rows_finish_within_the_prose_budget() -> None:
+    # REQ-001's third criterion is a prose goal (no judge checks it), so this
+    # check uses the stated 10-second budget rather than a tight timing.
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".csv", delete=False, newline=""
+    ) as handle:
+        handle.write("assignee,status\n")
+        for index in range(100_000):
+            status = "open" if index % 2 else "closed"
+            handle.write(f"user{index % 50},{status}\n")
+        path = handle.name
+    try:
+        started = time.monotonic()
+        result = run_tool(path)
+        elapsed = time.monotonic() - started
+        assert result.returncode == 0, result.stderr
+        lines = result.stdout.splitlines()
+        assert len(lines) == 51, f"expected 50 assignees + TOTAL, saw {len(lines)}"
+        assert lines[-1] == "TOTAL 50000 50000"
+        assert elapsed < 10.0, (
+            f"100,000 rows took {elapsed:.2f}s, over the 10-second prose goal"
+        )
+    finally:
+        os.unlink(path)
 
 
 # --- REQ-002 / AMB-003 / AMB-004: parsing ----------------------------------
@@ -241,6 +269,7 @@ TESTS = [
     test_input_file_is_not_modified,
     test_missing_argument_is_a_usage_error,
     test_nonexistent_input_is_an_error_with_empty_stdout,
+    test_typical_100k_rows_finish_within_the_prose_budget,
     test_header_line_is_recognised_and_not_counted,
     test_header_only_file_reports_zero_totals,
     test_every_accepted_row_is_counted_exactly_once,

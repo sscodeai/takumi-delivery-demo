@@ -76,12 +76,16 @@ bash run-tests.sh
 `tests/test_summary.py` drives the real entry point against the checked-in CSV
 fixtures in `tests/fixtures/` and asserts the per-assignee open/closed counts
 on several distinct assignees, the zero-count case, header handling, the
-single totals line and its arithmetic, the skip rules and the sort order.
-`tests/test_summary_units.py` imports `summary.py` and checks the helper rules
-directly. Both write TAP reports (`reports/tests.tap` and
-`reports/tests-summary-units.tap`) and the runner exits non-zero if any check
-fails. `docs/test-plan.md` maps each acceptance criterion to the checks that
-cover it.
+single totals line and its arithmetic, the skip rules, the sort order, and
+that a typical 100,000-row file stays inside the document's 10-second prose
+budget. `tests/test_summary_units.py` imports `summary.py` and checks the
+helper rules directly. `tests/test_contract.py` reads the resulting TAP
+reports, checks the mutation-harness metadata, and asserts that the README and
+the confirmed requirement record every AMB-nnn answer and its pending status.
+All three write TAP reports (`reports/tests.tap`,
+`reports/tests-summary-units.tap` and `reports/tests-contract.tap`) and the
+runner exits non-zero if any check fails. `docs/test-plan.md` maps each
+acceptance criterion and ambiguity to the checks that cover it.
 
 ```
 bash tests/mutation.sh

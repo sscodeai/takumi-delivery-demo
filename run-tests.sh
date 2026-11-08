@@ -10,7 +10,11 @@
 #   tests/test_summary_units.py unit: imports summary.py and checks the helper
 #                               rules behind every criterion and every AMB-nnn
 #                               decision, writing
-#                               reports/tests-summary-units.tap.
+#                               reports/tests-summary-units.tap;
+#   tests/test_contract.py      delivery contract: checks the TAP reports, the
+#                               mutation harness metadata and the README /
+#                               requirement documentation, writing
+#                               reports/tests-contract.tap.
 #
 # The inherited `passrate` and `region` tools from earlier deliveries in this
 # repository are not part of this requirement and are not run here.
@@ -24,6 +28,7 @@ mkdir -p reports
 
 tap_out="${TAP_OUT:-reports/tests.tap}"
 unit_tap="${tap_out%.tap}-summary-units.tap"
+contract_tap="${tap_out%.tap}-contract.tap"
 
 status=0
 set +e
@@ -31,6 +36,8 @@ TAP_OUT="$tap_out" python3 tests/test_summary.py
 acceptance_status=$?
 TAP_OUT="$unit_tap" python3 tests/test_summary_units.py
 unit_status=$?
+TAP_OUT="$tap_out" CONTRACT_TAP_OUT="$contract_tap" python3 tests/test_contract.py
+contract_status=$?
 set -e
 
 if [ "$acceptance_status" -ne 0 ]; then
@@ -38,5 +45,8 @@ if [ "$acceptance_status" -ne 0 ]; then
 fi
 if [ "$unit_status" -ne 0 ]; then
   status="$unit_status"
+fi
+if [ "$contract_status" -ne 0 ]; then
+  status="$contract_status"
 fi
 exit "$status"

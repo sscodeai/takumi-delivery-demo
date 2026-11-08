@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -225,7 +226,7 @@ def copy_project(destination: Path) -> None:
     ignore = shutil.ignore_patterns(
         "__pycache__", "*.pyc", "reports", ".git", "node_modules"
     )
-    for name in ("summary.sh", "summary.py", "run-tests.sh", "tests"):
+    for name in ("summary.sh", "summary.py", "run-tests.sh", "tests", "README.md", "docs"):
         source = ROOT / name
         target = destination / name
         if source.is_dir():
@@ -252,6 +253,25 @@ def run_suite(work: Path) -> int:
     return completed.returncode
 
 
+def run_mutant(
+    mutant: Dict[str, object],
+    sources: Dict[str, str],
+) -> Tuple[int, int]:
+    """Apply one mutant in a throwaway copy and return (anchor line, rc)."""
+    target = str(mutant.get("target", "summary.py"))
+    source = sources[target]
+    edits = mutant["edits"]  # type: ignore[assignment]
+    line = anchor_line(source, edits)
+    work = Path(tempfile.mkdtemp(prefix="takumi-mutation-"))
+    try:
+        copy_project(work)
+        (work / target).write_text(apply_edits(source, edits), encoding="utf-8")
+        returncode = run_suite(work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return line, returncode
+
+
 def main() -> int:
     sources = {
         "summary.py": (ROOT / "summary.py").read_text(encoding="utf-8"),
@@ -259,21 +279,15 @@ def main() -> int:
     }
     survivors: List[Dict[str, object]] = []
 
-    for mutant in MUTANTS:
-        target = str(mutant.get("target", "summary.py"))
-        source = sources[target]
-        edits = mutant["edits"]  # type: ignore[assignment]
-        line = anchor_line(source, edits)
-        work = Path(tempfile.mkdtemp(prefix="takumi-mutation-"))
-        try:
-            copy_project(work)
-            (work / target).write_text(
-                apply_edits(source, edits), encoding="utf-8"
-            )
-            returncode = run_suite(work)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+    # Mutants are independent, so run a few copies at once.  The report is
+    # still assembled in declaration order, which keeps it deterministic.
+    jobs = max(1, int(os.environ.get("MUTATION_JOBS", "4")))
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        outcomes = list(
+            pool.map(lambda mutant: run_mutant(mutant, sources), MUTANTS)
+        )
 
+    for mutant, (line, returncode) in zip(MUTANTS, outcomes):
         killed = returncode != 0
         print(
             f"{'killed  ' if killed else 'SURVIVED'} {mutant['id']}: "
@@ -282,7 +296,7 @@ def main() -> int:
         if not killed:
             survivors.append(
                 {
-                    "file": target,
+                    "file": str(mutant.get("target", "summary.py")),
                     "line": line,
                     "description": str(mutant["description"]),
                 }
