@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-11-08T13:18:29.616Z"
+  at: "2026-11-08T13:50:32.205Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,188 +10,206 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "What happens to a data row that cannot be used (wrong field count, empty region, non-numeric amount)?"
-      chosen: "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+      question: "What happens to a data row that cannot be read (wrong field count, blank region, non-numeric amount)?"
+      chosen: "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
       class: malformed-row-accounting
       policy: document-default
       checkedAs: skip-count
     - id: AMB-002
-      question: "When the same region key appears on several data rows, what does the report do with those rows?"
-      chosen: "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+      question: "An identical (region, amount) row appears more than once: is each occurrence its own sales record?"
+      chosen: "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
       class: duplicate-resolution
       policy: document-default
       checkedAs: merge
     - id: AMB-003
-      question: "How do the printed sums and averages round when the exact value has more than two decimal places?"
-      chosen: "half-up: round half away from zero at the second decimal place"
+      question: "How are revenue and average order value rounded and how many decimals are printed?"
+      chosen: "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
       class: independent-aggregation
       policy: document-default
       checkedAs: half-up
     - id: AMB-004
-      question: "How should the amount field be parsed before it is summed?"
-      chosen: "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
-      class: unmechanised
-      policy: document-default
-    - id: AMB-005
-      question: "Is the region key compared exactly as written, or normalised before grouping?"
-      chosen: "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
+      question: "Is the region cell compared case-sensitively and with whitespace trimmed, or normalised before grouping?"
+      chosen: "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
-    title: "Provide a CSV summarising entry point"
-    description: "The deliverable is a command-line tool invoked as `bash summary.sh <csv>` from the repository root. summary.sh is the only entry point, takes the CSV path as $1, reads a CSV whose first line is the header `region,amount`, and exits 0 after printing the report to stdout. It must not require network access or a build step, and it must print nothing but report lines to stdout (diagnostics, if any, go to stderr)."
+    title: "Provide the CSV summary entry point"
+    description: "The repository provides a shell entry point `summary.sh` at its root. `bash summary.sh <path-to-csv>` reads the CSV named by its first argument, writes the report to standard output, and takes no other arguments, no interactive input and no network access. The same command is the one a judge invokes."
     acceptance_criteria:
-      - "`bash summary.sh sample.csv` on a well-formed file exits 0 and writes report lines to stdout."
-      - "The script is named summary.sh, sits at the repository root, and reads the input path from its first positional argument."
-      - "The first line of the input is treated as the header row and is never counted as a data row, even when the header names differ in case or surrounding whitespace."
+      - "`bash summary.sh <readable-csv>` exits 0 and writes the report to standard output."
+      - "The script needs exactly one argument, the CSV path; it ignores nothing and reads no other file for its data."
+      - "A fixture of a few thousand rows completes well inside the declared 120000 ms bound."
     priority: High
-    source: "I want a command-line tool that reads a CSV of sales records; CSV has a header row with columns region, amount"
-
+    source: "I want a command-line tool that reads a CSV of sales records"
   - id: REQ-002
-    title: "Print total revenue and average order value per region"
-    description: "For every distinct region value in the data rows, print exactly one region line of the form `<region> <count> <sum> <mean>`, where count is the number of data rows attributed to that region, sum is the total revenue (sum of the amount column) for that region, and mean is the average order value (sum divided by count) for that region. Sum and mean are printed with exactly two decimal places; count is an integer with no decimal point."
+    title: "Resolve the region and amount columns by header name"
+    description: "The first line of the file is a header row naming the columns `region` and `amount`. The tool maps columns by header name, so their order in the file may differ from the declared sample; data rows are comma separated and each row supplies one value per header column."
     acceptance_criteria:
-      - "A file containing `North,120.50` and `North,99.50` and `South,80.00` prints a North line whose count is 2, whose sum is 220.00 and whose mean is 110.00, and a South line whose count is 1, whose sum is 80.00 and whose mean is 80.00."
-      - "Every distinct region in the data rows appears on exactly one region line and no region line names a region absent from the data rows."
-      - "Each region line's field values appear positionally in the order region, count, sum, mean, separated by single spaces."
+      - "A file whose header is `amount,region` with the same data produces the same report as the file whose header is `region,amount`."
+      - "A file whose header lacks either `region` or `amount` exits non-zero with a diagnostic on standard error and prints no report line on standard output."
+    priority: High
+    source: "The CSV has a header row with columns: region, amount."
+  - id: REQ-003
+    title: "Print one aggregate line per region"
+    description: "For every distinct region the tool prints exactly one line `<region> <revenue> <average_order_value>`, where revenue is the sum of the amount column over that region's counted rows and average_order_value is that revenue divided by that region's counted rows. Formatting follows REQ-007."
+    acceptance_criteria:
+      - "Every region present in the valid rows appears on exactly one line, and no region absent from the input appears."
+      - "The second field equals the sum of the region's amounts."
+      - "The third field equals the region's sum divided by the number of its counted rows, printed as REQ-007 requires."
     priority: High
     source: "prints the total revenue and the average order value per region"
-
-  - id: REQ-003
-    title: "Print a whole-report totals line"
-    description: "After the region lines, print exactly one totals line of the form `TOTAL <count> <sum>`, where count is the number of usable data rows across all regions and sum is the total revenue across all regions, formatted like the region-line numbers (integer count, two-decimal sum). For an input with a header row and no data rows, print only the totals line, with count 0 and sum 0.00, and exit 0."
-    acceptance_criteria:
-      - "Exactly one line in the output starts with `TOTAL `."
-      - "For the sample world, the totals line is `TOTAL 4 345.25` and it follows all region lines."
-      - "A header-only file produces the single line `TOTAL 0 0.00` and exit status 0."
-    priority: High
-    source: "prints the total revenue ... (the whole, not only per region)"
-
   - id: REQ-004
-    title: "Handle unusable data rows as decided"
-    description: "A data row is unusable when it does not have exactly two fields, when the region field is empty or whitespace-only, or when the amount field is not a plain decimal number (optional leading minus, digits, optional fractional part). Unusable rows are handled the way AMB-001 decides; a row that is skipped is excluded from every aggregate and from the totals line, and a file a human reads still shows how many rows were skipped when AMB-001 says to count them."
+    title: "Print one totals line for the whole file"
+    description: "After the per-region lines the tool prints exactly one totals line `TOTAL <revenue> <orders>`, where revenue is the sum of the amount column over all counted rows and orders is the number of counted rows. This line is printed even when there is no region line."
     acceptance_criteria:
-      - "A file with one well-formed row and one row whose amount is `abc` still exits 0 under the default decision and prints region aggregates computed only from the well-formed row."
-      - "Skipped rows never contribute to any region count, region sum, region mean, or the totals line."
-      - "The number of skipped rows reported, if reported, equals the number of unusable data rows in the input."
+      - "The printed totals revenue equals the sum of the printed per-region revenues."
+      - "The printed order count equals the number of rows the tool counted, so it also equals the sum of the per-region row counts."
+      - "Exactly one line beginning with `TOTAL` appears in every successful run."
     priority: High
-    source: "CSV ... columns: region, amount (the request does not say what a broken row does)"
-
+    source: "prints the total revenue ... per region"
   - id: REQ-005
-    title: "Aggregate repeated region keys into one region line"
-    description: "A region value repeating across rows is not an error and not a conflict: every data row is its own order and all rows sharing a region key contribute to that region's single count, sum and mean, as AMB-002 decides. Region lines are emitted in ascending byte order of the region string so that the output is deterministic."
+    title: "Skip and count malformed rows"
+    description: "A data row that cannot be read is skipped rather than fatal: wrong field count, blank region cell, or an amount cell that is not a plain decimal number makes the row malformed. A skipped row contributes to no region and is not counted as an order. The tool prints one line `SKIPPED <skipped>` carrying the number of skipped data rows, and still exits 0."
     acceptance_criteria:
-      - "Two rows with region `North` produce one North line whose count is 2 rather than two North lines."
-      - "Region lines appear in ascending byte order of the region string."
-      - "No region key is dropped or merged with a differently spelled region key."
+      - "A file with 3 valid rows and 2 malformed rows prints `SKIPPED 2`, and its region lines and totals line reflect only the 3 valid rows."
+      - "A file whose data rows are all malformed exits 0 and prints `SKIPPED <n>` plus `TOTAL 0.00 0`."
+      - "`SKIPPED 0` is printed when no row is malformed."
     priority: High
-    source: "per region (region is a group key, so it repeats by nature)"
-
+    source: "decision AMB-001 (default: skip the row and count it)"
   - id: REQ-006
-    title: "Round and format every printed number predictably"
-    description: "Sums and means are printed with exactly two decimal places using round-half-away-from-zero, as AMB-003 decides, regardless of the number of decimals present in the input. No thousands separators, currency symbols or scientific notation are printed. The sum of a region is the rounded total of its raw amounts, and the mean is computed from the unrounded region sum divided by the region count and then rounded for printing."
+    title: "Merge every occurrence of a repeated row"
+    description: "Rows are sales records, so an identical (region, amount) pair occurring twice counts twice. Every valid row is merged into the aggregate of its region; nothing is deduplicated, dropped or treated as an error."
     acceptance_criteria:
-      - "An amount of `0.005`-style halves round away from zero at the second decimal place rather than being truncated."
-      - "Every printed sum and mean matches the regular expression `-?[0-9]+\\.[0-9]{2}`."
-      - "Input amounts written with one decimal or with none still produce two-decimal output."
-    priority: Medium
-    source: "average order value (a quotient, so its printed precision must be settled)"
-
+      - "Duplicating one valid row raises that region's revenue by the row's amount and its order count by one, and raises the order count on the totals line by one."
+      - "A region is never printed on two lines, however many rows it has."
+    priority: High
+    source: "decision AMB-002 (default: merge)"
   - id: REQ-007
-    title: "Make the report independent of row order"
-    description: "Shuffling the data rows of an input must not change any region line or the totals line, and must not change the order in which region lines are printed, which is fixed by the region string."
+    title: "Print numbers with two decimals, rounded half away from zero"
+    description: "Revenue and average order value are printed with exactly two decimal places, rounding the value computed from the full-precision input half away from zero. No thousands separators and no currency symbol; a leading minus sign is printed for negative values."
     acceptance_criteria:
-      - "Running the tool on a file and on a row-shuffled copy of the same file yields byte-identical stdout."
-      - "Each region's count, sum and mean is unchanged by row order, including when the mean is a repeating decimal."
+      - "A region with the single amount 0.125 prints revenue 0.13 and average 0.13, not 0.12."
+      - "A region with the single amount 2.674 prints revenue 2.67."
+      - "Every printed number matches ^-?[0-9]+\\.[0-9]{2}$."
+    priority: High
+    source: "decision AMB-003 (default: half-up at two decimals)"
+  - id: REQ-008
+    title: "Define the region key as the trimmed, case-sensitive cell"
+    description: "The group key is the region cell with surrounding ASCII whitespace trimmed. Comparison is case-sensitive, so `north` and `North` are two regions with two lines, and the printed id is the trimmed text as first seen. This identity rule is recorded for implementers only: no declared relation checks case-sensitivity."
+    acceptance_criteria:
+      - "A file containing both `north` and `North` prints two separate per-region lines."
+      - "A cell written ` north ` is aggregated with `north` and printed as `north`."
     priority: Medium
-    source: "reads a CSV of sales records (no ordering is stated, so the result must not depend on it)"
-
+    source: "decision AMB-004 (default: case-sensitive, trimmed)"
+  - id: REQ-009
+    title: "Treat negative and zero amounts as valid measures"
+    description: "Negative amounts (refunds) and zero amounts are accepted unchanged rather than reported as malformed, so a region's revenue and average may be zero or negative."
+    acceptance_criteria:
+      - "A region with amounts 100.00 and -40.00 prints revenue 60.00 and average 30.00."
+      - "A negative amount never appears in the `SKIPPED` count."
+    priority: Medium
+    source: "sales records whose amount column is the measure"
+  - id: REQ-010
+    title: "Accept a header-only file"
+    description: "A file with a valid header and no data rows is not an error: the tool prints no region line, prints `SKIPPED 0`, then `TOTAL 0.00 0`, and exits 0."
+    acceptance_criteria:
+      - "A header-only file exits 0 and prints exactly the two lines `SKIPPED 0` and `TOTAL 0.00 0`."
+      - "A completely empty file is reported as an error (REQ-012), not as an empty report."
+    priority: Medium
+    source: "the CSV has a header row with columns: region, amount"
+  - id: REQ-011
+    title: "Make the report independent of row order"
+    description: "Per-region lines are sorted by region name in ascending byte order (C locale), followed by the `SKIPPED` line and then the `TOTAL` line, so the report depends only on the multiset of valid rows."
+    acceptance_criteria:
+      - "Two files holding the same valid rows in different order produce byte-identical standard output."
+      - "Region lines appear in ascending byte order of the region name."
+    priority: High
+    source: "the request asks for per-region figures that cannot depend on file order"
+  - id: REQ-012
+    title: "Fail loudly on unusable input"
+    description: "An unreadable path or an empty file exits non-zero with a diagnostic on standard error and prints no report line on standard output. A missing required header column follows REQ-002."
+    acceptance_criteria:
+      - "`bash summary.sh /nonexistent.csv` exits non-zero, writes a message to standard error and nothing to standard output."
+      - "An empty file exits non-zero and prints no `TOTAL` line."
+    priority: Medium
+    source: "a command-line tool over a file whose format is stated"
 ambiguities:
   - id: AMB-001
-    question: "What happens to a data row that cannot be used (wrong field count, empty region, non-numeric amount)?"
+    question: "What happens to a data row that cannot be read (wrong field count, blank region, non-numeric amount)?"
     options:
-      - "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
-      - "skip-silent: skip the unusable row silently, with no skipped line and no stderr message"
-      - "stop-error: abort the whole run with a non-zero exit status and an error message naming the offending line"
-    default: "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+      - "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
+      - "skip-silent: skip the row and report nothing about it"
+      - "stop-error: abort the whole run with a non-zero exit on the first bad row"
+    default: "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
     checkedAs: skip-count
     blocking: true
-    chosen: "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+    chosen: "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
   - id: AMB-002
-    question: "When the same region key appears on several data rows, what does the report do with those rows?"
+    question: "An identical (region, amount) row appears more than once: is each occurrence its own sales record?"
     options:
-      - "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
-      - "last-row: only the last occurrence of the region is kept and earlier rows with that region are discarded"
-      - "error: a repeated region key is a hard failure with a non-zero exit status"
-    default: "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+      - "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
+      - "first-row: only the first occurrence of an identical (region, amount) pair is counted"
+      - "error: a repeated identical pair makes the run fail with a non-zero exit"
+    default: "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
     checkedAs: merge
     blocking: true
-    chosen: "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+    chosen: "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
   - id: AMB-003
-    question: "How do the printed sums and averages round when the exact value has more than two decimal places?"
+    question: "How are revenue and average order value rounded and how many decimals are printed?"
     options:
-      - "half-up: round half away from zero at the second decimal place"
-      - "truncate: drop everything after the second decimal place without rounding"
-    default: "half-up: round half away from zero at the second decimal place"
+      - "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
+      - "truncate: print exactly two decimals, dropping everything past the second decimal (0.125 prints 0.12)"
+    default: "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
     checkedAs: half-up
     blocking: true
-    chosen: "half-up: round half away from zero at the second decimal place"
+    chosen: "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
   - id: AMB-004
-    question: "How should the amount field be parsed before it is summed?"
+    question: "Is the region cell compared case-sensitively and with whitespace trimmed, or normalised before grouping?"
     options:
-      - "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
-      - "tolerant: strip currency symbols, thousands separators and surrounding whitespace, then parse what remains as a decimal"
-    default: "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
+      - "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
+      - "case-folded: trim and compare case-insensitively, printing one region under the first-seen spelling"
+    default: "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
     blocking: false
-    chosen: "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
-  - id: AMB-005
-    question: "Is the region key compared exactly as written, or normalised before grouping?"
-    options:
-      - "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
-      - "trim-fold: surrounding whitespace is stripped and the value is lowercased before grouping, and the printed key is the lowercased trimmed form"
-    default: "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
-    blocking: false
-
-    chosen: "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
+    chosen: "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
 deliverable:
   run: "bash summary.sh {csv}"
-  timeoutMs: 30000
+  timeoutMs: 120000
   input_format:
     columns: "region:id,amount:measure"
     sample: |
-      North,120.50
-      South,80.00
-      North,99.50
-      East,45.25
+      north,100.00
+      south,50.00
+      north,25.50
+      east,10.25
   output_format:
     region_line:
-      shape: "<region> <count> <sum> <mean>"
-      fields: [id, count, sum, mean]
-    total_line:
-      shape: "TOTAL <count> <sum>"
-      fields: [count, sum]
+      shape: "<region> <revenue> <average_order_value>"
+      fields: [id, sum, mean]
     skipped_line:
-      shape: "SKIPPED <skipped-count>"
+      shape: "SKIPPED <skipped>"
       fields: [skipped-count]
+    total_line:
+      shape: "TOTAL <revenue> <orders>"
+      fields: [sum, count]
   relations:
     - id: REL-001
       relation: malformed-row-accounting
       decides: AMB-001
-      description: "An unusable row is skipped and the printed report accounts for it the way AMB-001 decided, with the skipped rows excluded from every aggregate and from the totals line."
+      description: "A row that cannot be read is excluded from every aggregate and counted on the SKIPPED line, the way AMB-001 decided."
     - id: REL-002
+      relation: additivity
+      description: "The per-region revenues sum to the revenue on the printed totals line, and the per-region row counts sum to the printed order count."
+    - id: REL-003
       relation: duplicate-resolution
       decides: AMB-002
-      description: "Rows sharing a region key resolve into that region's aggregate the way AMB-002 decided."
-    - id: REL-003
-      relation: additivity
-      description: "The per-region counts sum to the count on the TOTAL line, and the per-region sums sum to the sum on the TOTAL line."
+      description: "A repeated identical (region, amount) row is counted again in the region aggregate and in the totals, the way AMB-002 decided."
     - id: REL-004
       relation: row-order-invariance
-      description: "Shuffling the data rows leaves every printed line and their order unchanged."
+      description: "Shuffling the data rows leaves the printed report byte-identical."
   differential:
     - id: DIFF-001
       anchor: independent-aggregation
       decides: AMB-003
-      description: "An independent recomputation of each region's count, summed revenue and average order value, rounded as AMB-003 decided, matches the tool's region lines and totals line."
+      description: "An independent recomputation of each region's revenue and average, and of the file totals, from the same records matches the tool's printed numbers, rounded the way AMB-003 decided."
