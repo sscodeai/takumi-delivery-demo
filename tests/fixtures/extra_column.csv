@@ -1,0 +1,9 @@
+id,assignee,status,priority
+1,alice,open,high
+2,bob,closed,low
+3,alice,closed,high
+4,carol,open,low
+5,alice,open,high
+6,alice,open,low
+7,bob,closed,high
+8,bob,closed,low

@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-11-08T16:33:05.953Z"
+  at: "2026-11-08T16:46:06.079Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,158 +10,141 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "How is each assignee's open and closed result laid out on screen?"
-      chosen: "one-line: one line per assignee carrying both the open count and the closed count"
+      question: "Which status values count as open and as closed, and what happens to any other status value?"
+      chosen: "exact-match: only `open` and `closed` are counted, compared case-insensitively after trimming surrounding whitespace; any other status value is skipped and reported as a skipped count on stderr"
       class: unmechanised
       policy: document-default
     - id: AMB-002
-      question: "In what order do the per-assignee results appear?"
-      chosen: "alphabetical: assignees sorted by name, locale-independent byte order"
+      question: "Does each assignee get one line carrying both counts, or one line per assignee-and-status pair?"
+      chosen: "one-line-per-assignee: `<assignee> <open_count> <closed_count>`"
       class: unmechanised
       policy: document-default
     - id: AMB-003
-      question: "Which status values count as open and which as closed?"
-      chosen: "exact: only the lowercase tokens `open` and `closed` are recognised"
+      question: "What happens to a data row whose assignee or status field is empty, and to a file whose header lacks the required columns?"
+      chosen: "skip-count: such rows are skipped, their number is reported on stderr, and the run still exits 0; a header without `assignee` and `status` stops with a clear stderr message and a nonzero exit"
       class: unmechanised
       policy: document-default
     - id: AMB-004
-      question: "What happens to a data row with an empty assignee or an unrecognised status?"
-      chosen: "skip: the row is ignored and the run continues, without affecting either count"
-      class: unmechanised
-      policy: document-default
-    - id: AMB-005
-      question: "How is an assignee shown whose tickets are all in one status?"
-      chosen: "explicit-zero: the missing category is printed as 0"
+      question: "Are assignee names normalised before grouping, so that spelling variants merge into one line or stay separate?"
+      chosen: "trim-case-sensitive: surrounding whitespace is trimmed and case is preserved, so `Alice` and `alice` are two assignees"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
-    title: "Provide the summary.sh entry point"
-    description: "The repository must ship `summary.sh` at its root. It is invoked as `bash summary.sh <csv>` and takes the path of the ticket CSV as its first argument. It must use only tooling already available locally, need no network access, and leave the input file untouched."
+    title: "Provide summary.sh as the command-line entry point"
+    description: "The repository root must contain a script summary.sh invoked as `bash summary.sh <csv>`, where <csv> is the path to a support-ticket CSV file. It reads that file, prints the per-assignee counts to stdout, requires no interactive input, and exits 0 on success. The repository also ships sample/tickets.csv so that the documented invocation `bash summary.sh sample/tickets.csv` works on a clean checkout with only the toolchain already present on the machine."
     acceptance_criteria:
-      - "`bash summary.sh <csv>` accepts an existing CSV path as `$1` and exits 0 on well-formed input."
-      - "No argument other than the CSV path is required, and the input file is not modified."
-      - "A typical file of 100,000 ticket rows is summarised in under 10 seconds; this is a prose goal and no judge checks it."
+      - "`bash summary.sh sample/tickets.csv` exits 0 and prints the report to stdout from a clean checkout."
+      - "`summary.sh` exists at the repository root and takes the CSV path as its first argument."
+      - "No network access, service, or interactive prompt is needed to run it."
     priority: High
-    source: "I want a command-line tool that reads a CSV of support tickets"
+    source: "I want a command-line tool that reads a CSV of support tickets and prints ..."
   - id: REQ-002
-    title: "Parse the ticket CSV and count per assignee and status"
-    description: "The first line of the CSV is the header `assignee,status` and is never counted as a ticket. Every remaining row contributes exactly one ticket to the cell identified by its assignee and its status. Open and closed are the two statuses the report distinguishes; how a status value is matched to them is left to AMB-003, and how an unusable row is treated is left to AMB-004. Printed counts are non-negative integers."
+    title: "Locate columns by header name and parse RFC 4180 CSV"
+    description: "The first line of the input is a header naming at least the columns `assignee` and `status`. Columns are located by header name, not by position, so a file whose two columns appear in the other order, or that carries additional columns, is still read correctly. Fields follow RFC 4180 quoting: a quoted field may contain commas, doubled quotes and embedded newlines; records end with LF or CRLF."
     acceptance_criteria:
-      - "The header line is recognised and excluded from all counts."
-      - "Each data row increments exactly one assignee/status cell, so no accepted ticket is counted twice or dropped."
-      - "The two reported categories are open tickets and closed tickets."
+      - "A file whose header is `status,assignee` yields the same report as the same rows under `assignee,status`."
+      - "A quoted assignee value containing a comma is reported as one assignee name."
+      - "A file carrying an extra unrelated column still yields the correct counts."
     priority: High
     source: "The CSV has a header row with columns: assignee, status."
   - id: REQ-003
-    title: "Report both open and closed counts for each assignee"
-    description: "For every distinct assignee present in the CSV, the output reports how many of that assignee's tickets are open and how many are closed. An assignee whose tickets are all in one status is still reported, with the other number shown as zero (pending AMB-005 for the exact presentation). The layout of these lines is settled by AMB-001; no judge checks that layout yet."
+    title: "Count open and closed tickets per assignee"
+    description: "For every distinct assignee the tool counts that assignee's rows whose status is open and those whose status is closed, and prints exactly one line per assignee of the form `<assignee> <open_count> <closed_count>`, single-space separated, both numbers decimal integers. A class with no tickets prints 0 in its position. Every counted data row contributes to exactly one assignee line and one status count."
     acceptance_criteria:
-      - "Every distinct assignee in the input appears exactly once in the report."
-      - "An assignee with tickets in both statuses shows both its open count and its closed count."
-      - "An assignee with tickets in only one status is still reported."
-      - "The sum of the per-assignee open counts and the sum of the per-assignee closed counts together equal the number of accepted ticket rows."
+      - "An assignee with three open and one closed ticket prints `alice 3 1`."
+      - "An assignee with only closed tickets prints an open count of 0."
+      - "Across all printed lines, total open plus total closed equals the number of counted data rows."
     priority: High
     source: "prints how many tickets each assignee has open and closed"
   - id: REQ-004
-    title: "Print a file-wide totals line"
-    description: "After the per-assignee report the tool prints one totals line for the whole file, giving the total number of open tickets and the total number of closed tickets. Those totals must equal the sums of the per-assignee counts, and their sum must equal the number of accepted ticket rows."
+    title: "Print a deterministic, locale-independent report order"
+    description: "Assignee lines are sorted by assignee in byte order (C-locale collation) so that two runs over the same input, and runs over a row-shuffled version of it, produce identical bytes. The output carries no timestamps, absolute paths, or locale-dependent number formatting."
     acceptance_criteria:
-      - "Exactly one totals line is printed."
-      - "The totals line reports the open total and the closed total for the whole file."
-      - "Each total equals the sum of the corresponding per-assignee counts."
-      - "The open total plus the closed total equals the number of accepted ticket rows."
-    priority: High
-    source: "prints how many tickets each assignee has open and closed"
+      - "Shuffling the data rows of a fixture does not change the output byte for byte."
+      - "Running the tool twice over the same fixture produces identical bytes."
+    priority: Medium
+    source: "Not stated in the request; settled here so the printed report is reproducible."
   - id: REQ-005
-    title: "Ship the test suite that decides the output"
-    description: "The repository must ship `run-tests.sh` at its root as the delivered test entry point. Running `bash run-tests.sh` exercises `summary.sh` against checked-in CSV fixtures and writes a TAP report to `reports/tests.tap`. The tests must assert the per-assignee open/closed counts, the zero-count case, header handling, and the totals line, and must report `not ok` when the observed counts are wrong."
+    title: "Print nothing for a file with no counted rows"
+    description: "A file that contains only the header, or whose data rows are all skipped under the malformed-row decision, produces no report lines and exits 0. The tool does not invent a zero-filled line for an assignee it never saw."
     acceptance_criteria:
-      - "`bash run-tests.sh` exits 0 when the implementation is correct and writes a readable TAP report to `reports/tests.tap`."
-      - "The report contains at least one `ok` line per asserted behaviour and no `not ok` line for a correct implementation."
-      - "The tests assert per-assignee open and closed counts on at least two distinct assignees, the zero-count case, and the totals line."
-      - "A summary.sh that miscounts, swaps open and closed, or omits the totals line makes at least one test report `not ok`."
-    priority: High
-    source: "I want a command-line tool that reads a CSV of support tickets and prints how many tickets each assignee has open and closed."
+      - "A header-only fixture produces empty stdout and exit status 0."
+      - "No assignee name absent from the data appears in the output."
+    priority: Medium
+    source: "Not stated in the request; settled here in prose so the requirement text is complete."
   - id: REQ-006
-    title: "Ship the mutation check for the delivered tests"
-    description: "The repository must ship `tests/mutation.sh`, runnable as `bash tests/mutation.sh`. It mutates the counting behaviour in `summary.sh` (for example by swapping the open and closed buckets, or by dropping the totals line) and re-runs the delivered tests against each mutant. It writes a tool-agnostic survivors report to `reports/mutation/mutation.json` in the form `{\"total\": <int>, \"survivors\": [{\"file\": \"...\", \"line\": <int>, \"description\": \"...\"}, ...]}`."
+    title: "Ship an automated test suite that pins the counting behaviour"
+    description: "The repository must contain run-tests.sh at its root, which runs the project's test suite and writes a TAP report to reports/tests.tap. The suite owns its fixtures and asserts the exact stdout of summary.sh for at least: mixed open/closed counts, an assignee with only one status, row shuffling, a header-only file, and each decision AMB-001 to AMB-004 in the form chosen by its default (or by the answer a human gives). The suite must fail when any expectation is violated. No independent judge recomputes these decisions: the delivered tests and the mutation check are the only mechanised evidence for them."
     acceptance_criteria:
-      - "`bash tests/mutation.sh` writes a readable report to `reports/mutation/mutation.json`."
-      - "The report states a total number of mutants greater than zero."
-      - "The delivered test suite fails on every injected mutant, so the survivors list is empty."
-    priority: Medium
-    source: "Derived from the delivery contract: the delivered tests must be able to fail."
+      - "`bash run-tests.sh` exits 0 and writes reports/tests.tap with no failing TAP line."
+      - "The suite reports a failure (nonzero exit, failing TAP line) when a fixture expectation is deliberately broken."
+      - "Each decision AMB-001 through AMB-004 has at least one test whose fixture exercises it."
+    priority: High
+    source: "Shape decision: the requested CSV carries no numeric measure column to aggregate, so the answer is checked by the delivered tests rather than by a recomputed aggregate."
   - id: REQ-007
-    title: "Document the deferred decisions without choosing them"
-    description: "The delivered README must list the open decisions AMB-001 through AMB-005 and state plainly that they are pending human sign-off and that no judge checks them yet. The implementation must not hide a choice: if a default is implemented while a question is open, the README says which default was taken."
+    title: "Ship a mutation harness that leaves no surviving mutant"
+    description: "The repository must contain mutation/run.sh, which runs a mutation tool over the implementation that summary.sh executes and writes a tool-agnostic report `{\"total\": <int>, \"survivors\": [...]}` to reports/mutation/mutation.json. The run must measure at least one mutant and leave zero survivors: the delivered test suite has to fail for every mutated implementation."
     acceptance_criteria:
-      - "The README names every ambiguity in this document and its current status."
-      - "The README states that the pending presentation and tolerance decisions are not mechanised by a judge."
-      - "No acceptance criterion of REQ-001 through REQ-006 claims a check that the judge does not run."
+      - "`bash mutation/run.sh` writes reports/mutation/mutation.json with `total` greater than 0 and an empty `survivors` list."
+      - "The harness exits nonzero when any mutant survives."
     priority: Medium
-    source: "Requirement intake rule: do not silently choose an interpretation and drop the question."
+    source: "Not stated in the request; required so the delivered tests are shown to be able to fail."
 ambiguities:
   - id: AMB-001
-    question: "How is each assignee's open and closed result laid out on screen?"
+    question: "Which status values count as open and as closed, and what happens to any other status value?"
     options:
-      - "one-line: one line per assignee carrying both the open count and the closed count"
-      - "per-status: two lines per assignee, one for its open count and one for its closed count"
-      - "sections: an OPEN section and a CLOSED section, each listing every assignee"
-    default: "one-line: one line per assignee carrying both the open count and the closed count"
+      - "exact-match: only `open` and `closed` are counted, compared case-insensitively after trimming surrounding whitespace; any other status value is skipped and reported as a skipped count on stderr"
+      - "binary: any status other than `closed` counts as open"
+      - "strict: a status value other than `open` or `closed` stops the run with a nonzero exit and a message naming the line"
+    default: "exact-match: only `open` and `closed` are counted, compared case-insensitively after trimming surrounding whitespace; any other status value is skipped and reported as a skipped count on stderr"
     blocking: false
-    chosen: "one-line: one line per assignee carrying both the open count and the closed count"
+    chosen: "exact-match: only `open` and `closed` are counted, compared case-insensitively after trimming surrounding whitespace; any other status value is skipped and reported as a skipped count on stderr"
   - id: AMB-002
-    question: "In what order do the per-assignee results appear?"
+    question: "Does each assignee get one line carrying both counts, or one line per assignee-and-status pair?"
     options:
-      - "alphabetical: assignees sorted by name, locale-independent byte order"
-      - "first-seen: assignees in the order their first ticket appears in the CSV"
-    default: "alphabetical: assignees sorted by name, locale-independent byte order"
+      - "one-line-per-assignee: `<assignee> <open_count> <closed_count>`"
+      - "one-line-per-pair: `<assignee> <status> <count>`"
+      - "wide-with-total: one line per assignee plus a trailing TOTAL line holding the summed open and closed counts"
+    default: "one-line-per-assignee: `<assignee> <open_count> <closed_count>`"
     blocking: false
-    chosen: "alphabetical: assignees sorted by name, locale-independent byte order"
+    chosen: "one-line-per-assignee: `<assignee> <open_count> <closed_count>`"
   - id: AMB-003
-    question: "Which status values count as open and which as closed?"
+    question: "What happens to a data row whose assignee or status field is empty, and to a file whose header lacks the required columns?"
     options:
-      - "exact: only the lowercase tokens `open` and `closed` are recognised"
-      - "case-insensitive: `Open`, `OPEN` and surrounding whitespace are accepted and normalised"
-      - "binary: `closed` (any case) is closed and every other non-empty value is open"
-    default: "exact: only the lowercase tokens `open` and `closed` are recognised"
+      - "skip-count: such rows are skipped, their number is reported on stderr, and the run still exits 0; a header without `assignee` and `status` stops with a clear stderr message and a nonzero exit"
+      - "skip-silent: bad rows are dropped silently and a file without a usable header is treated as empty input with exit 0"
+      - "stop-error: the first bad row or unusable header stops the run with a nonzero exit and a message naming the line number"
+    default: "skip-count: such rows are skipped, their number is reported on stderr, and the run still exits 0; a header without `assignee` and `status` stops with a clear stderr message and a nonzero exit"
     blocking: false
-    chosen: "exact: only the lowercase tokens `open` and `closed` are recognised"
+    chosen: "skip-count: such rows are skipped, their number is reported on stderr, and the run still exits 0; a header without `assignee` and `status` stops with a clear stderr message and a nonzero exit"
   - id: AMB-004
-    question: "What happens to a data row with an empty assignee or an unrecognised status?"
+    question: "Are assignee names normalised before grouping, so that spelling variants merge into one line or stay separate?"
     options:
-      - "skip: the row is ignored and the run continues, without affecting either count"
-      - "skip-and-report: the row is ignored and a count of skipped rows is printed alongside the totals"
-      - "stop: the tool prints an error naming the row and exits non-zero"
-    default: "skip: the row is ignored and the run continues, without affecting either count"
+      - "trim-case-sensitive: surrounding whitespace is trimmed and case is preserved, so `Alice` and `alice` are two assignees"
+      - "trim-case-insensitive: surrounding whitespace is trimmed and names are compared case-insensitively, printing the first spelling seen"
+      - "raw: the field is used exactly as it appears, whitespace included"
+    default: "trim-case-sensitive: surrounding whitespace is trimmed and case is preserved, so `Alice` and `alice` are two assignees"
     blocking: false
-    chosen: "skip: the row is ignored and the run continues, without affecting either count"
-  - id: AMB-005
-    question: "How is an assignee shown whose tickets are all in one status?"
-    options:
-      - "explicit-zero: the missing category is printed as 0"
-      - "omit-zero: the missing category is left out of that assignee's line"
-    default: "explicit-zero: the missing category is printed as 0"
-    blocking: false
-    chosen: "explicit-zero: the missing category is printed as 0"
+    chosen: "trim-case-sensitive: surrounding whitespace is trimmed and case is preserved, so `Alice` and `alice` are two assignees"
 deliverable:
   run: "bash summary.sh {csv}"
-  timeoutMs: 10000
+  timeoutMs: 30000
   scenarios:
     - id: SCN-001
       run: "bash run-tests.sh"
-      expect: "the delivered suite passes: its TAP report shows per-assignee open and closed counts, the zero-count case and the file-wide totals with no failing test"
+      expect: "the delivered test suite passes and asserts, assignee by assignee, the number of open and closed tickets that summary.sh prints, including the skipped-row and shuffling cases"
       report: tap
       report_path: "reports/tests.tap"
-      description: "Run the delivered test suite against checked-in CSV fixtures and read its TAP report."
+      description: "Run the delivered test suite and read its TAP report."
   relations:
     - id: REL-001
       relation: mutation-detection
       description: "The delivered tests fail when the delivered counting behaviour is mutated."
   mutation:
-    run: "bash tests/mutation.sh"
+    run: "bash mutation/run.sh"
     report_path: "reports/mutation/mutation.json"
     format: survivors-json
     max_survivors: 0
+    timeoutMs: 900000

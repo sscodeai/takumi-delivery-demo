@@ -6,7 +6,6 @@
 # Contract (docs/requirements/intake.yaml, deliverable block):
 #   run:          bash summary.sh {csv}
 #   assignee line: <assignee> <open-count> <closed-count>
-#   totals line:   TOTAL <open-total> <closed-total>
 #
 # There is no install or build step: the work happens in summary.py using only
 # the Python 3 standard library, so the command needs no network access.  The

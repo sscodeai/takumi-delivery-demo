@@ -1,95 +1,137 @@
 #!/usr/bin/env python3
-"""Acceptance tests for the ticket summary entry point.
+"""Acceptance tests for the per-assignee ticket summary.
 
-Every check drives the real ``bash summary.sh <csv>`` command in a
-subprocess against the checked-in fixtures under ``tests/fixtures/``, so the
-suite exercises exactly what the delivery declares.  The report is TAP, written
-to ``reports/tests.tap`` (or ``$TAP_OUT``), and the runner exits non-zero when
-any check fails.
+Every check drives the real ``bash summary.sh <csv>`` command in a subprocess,
+so the suite exercises exactly the entry point the requirement declares.  The
+TAP report is written to ``reports/tests.tap`` (or ``$TAP_OUT``) and the runner
+exits nonzero when any check fails.
 
 Coverage required by docs/requirements/intake.yaml:
-  REQ-001  entry point, argument handling, input left untouched
-  REQ-002  header excluded, every accepted row counted once
-  REQ-003  per-assignee open/closed counts, including the zero-count case
-  REQ-004  exactly one totals line, equal to the per-assignee sums
-  AMB-001  one line per assignee carrying both counts
-  AMB-002  alphabetical, locale-independent byte order
-  AMB-003  only the exact lowercase tokens ``open`` and ``closed``
-  AMB-004  an unusable row is skipped without affecting either count
-  AMB-005  a missing category is printed as 0
+  REQ-001  entry point, sample file, argument handling
+  REQ-002  header names, reordered/extra columns, RFC 4180 quoting
+  REQ-003  per-assignee open/closed counts, single-status assignees
+  REQ-004  byte-order sorting, row-order independence, locale independence
+  REQ-005  empty report for a file with no counted rows
+  AMB-001  trimmed, case-insensitive `open`/`closed`; other statuses skipped
+  AMB-002  one line per assignee carrying both counts, no extra line
+  AMB-003  bad rows skipped and counted on stderr; bad header is an error
+  AMB-004  assignee trimmed but case preserved
 """
 
 from __future__ import annotations
 
-import hashlib
 import os
+import random
+import re
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List
 
-ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _tap import ROOT, run_tests  # noqa: E402  (path is set up above)
+
 SUMMARY = ROOT / "summary.sh"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-MIXED_REPORT = "alice 2 1\nbob 0 3\ncarol 1 0\nTOTAL 3 4\n"
-ZERO_REPORT = "dave 3 0\nerin 0 1\nTOTAL 3 1\n"
-SKIPPED_REPORT = "frank 1 1\nTOTAL 1 1\n"
-SORTED_REPORT = (
-    "Alice 1 0\nZoe 1 0\nalice 0 1\nbob 0 1\nzoe 1 0\nTOTAL 3 2\n"
-)
+MIXED = "alice 3 1\nbob 0 3\ncarol 1 0\n"
+ZERO = "dave 2 0\nerin 0 1\n"
+SKIPPED = "frank 2 1\n"
+SORTED = "Alice 1 0\nZoe 1 0\nalice 1 1\nbob 0 1\nzoe 1 0\n"
+SAMPLE = "alice 2 1\nbob 1 1\ncarol 1 0\n"
 
 
-def run_tool(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess:
+def run_tool(
+    *args: str,
+    cwd: Path = ROOT,
+    extra_env: Dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    environment = dict(os.environ)
+    if extra_env:
+        environment.update(extra_env)
     return subprocess.run(
         ["bash", str(SUMMARY), *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=environment,
+        # REQ-001: the tool must never wait for interactive input or hang.
+        stdin=subprocess.DEVNULL,
+        timeout=30,
     )
 
 
 def report_for(name: str) -> str:
-    path = FIXTURES / name
-    result = run_tool(str(path))
+    result = run_tool(str(FIXTURES / name))
     assert result.returncode == 0, (
-        f"bash summary.sh {path} exited {result.returncode}: {result.stderr}"
+        f"bash summary.sh {name} exited {result.returncode}: {result.stderr}"
     )
     return result.stdout
 
 
-def report_lines(name: str) -> List[str]:
-    return report_for(name).splitlines()
+def write_temp_csv(text: str, *, newline: str = "") -> str:
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".csv", delete=False, newline=newline, encoding="utf-8"
+    )
+    with handle:
+        handle.write(text)
+    return handle.name
 
 
-def parse_assignee_line(line: str) -> Tuple[str, int, int]:
-    assignee, opened, closed = line.rsplit(" ", 2)
-    return assignee, int(opened), int(closed)
+def lines_of(report: str) -> List[str]:
+    return report.splitlines()
 
 
-def totals_line(lines: List[str]) -> str:
-    totals = [line for line in lines if line.startswith("TOTAL ")]
-    assert len(totals) == 1, f"expected exactly one TOTAL line, saw {totals!r}"
-    return totals[0]
+def skipped_count(stderr: str) -> int:
+    match = re.search(r"skipped (\d+) malformed", stderr)
+    assert match is not None, f"no skipped-row count on stderr: {stderr!r}"
+    return int(match.group(1))
 
 
-def assignee_lines(lines: List[str]) -> List[str]:
-    return [line for line in lines if not line.startswith("TOTAL ")]
+def totals_of(report: str) -> tuple[int, int]:
+    opened = closed = 0
+    for line in lines_of(report):
+        _, open_text, closed_text = line.rsplit(" ", 2)
+        opened += int(open_text)
+        closed += int(closed_text)
+    return opened, closed
 
 
-# --- REQ-001: entry point -------------------------------------------------
+# --- REQ-001: entry point --------------------------------------------------
 
 
-def test_entry_point_sits_at_the_repository_root() -> None:
+def test_entry_point_and_delivered_files_exist() -> None:
     assert SUMMARY.is_file(), "summary.sh is missing from the repository root"
     assert (ROOT / "run-tests.sh").is_file(), "run-tests.sh is missing"
-    assert (ROOT / "tests" / "mutation.sh").is_file(), "tests/mutation.sh is missing"
+    assert (ROOT / "mutation" / "run.sh").is_file(), "mutation/run.sh is missing"
+    assert (ROOT / "sample" / "tickets.csv").is_file(), "sample/tickets.csv is missing"
 
 
-def test_first_argument_is_the_csv_path_and_exit_is_zero() -> None:
-    assert report_for("mixed.csv") == MIXED_REPORT
+def test_documented_invocation_on_the_sample_file() -> None:
+    result = run_tool("sample/tickets.csv", cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == SAMPLE
+    assert result.stderr == ""
+
+
+def test_runs_without_interactive_input_or_network() -> None:
+    # REQ-001: stdin is already /dev/null in run_tool; point every proxy at a
+    # closed port and confirm the report still comes out.
+    result = run_tool(
+        "sample/tickets.csv",
+        extra_env={
+            "http_proxy": "http://127.0.0.1:9",
+            "https_proxy": "http://127.0.0.1:9",
+            "HTTP_PROXY": "http://127.0.0.1:9",
+            "HTTPS_PROXY": "http://127.0.0.1:9",
+            "NO_PROXY": "",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == SAMPLE
+    assert result.stderr == ""
 
 
 def test_relative_path_works_from_the_repository_root() -> None:
@@ -98,17 +140,10 @@ def test_relative_path_works_from_the_repository_root() -> None:
         cwd=str(ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == MIXED_REPORT
-
-
-def test_input_file_is_not_modified() -> None:
-    path = FIXTURES / "mixed.csv"
-    before = hashlib.sha256(path.read_bytes()).hexdigest()
-    run_tool(str(path))
-    after = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert before == after, "summary.sh modified its input file"
+    assert result.stdout == MIXED
 
 
 def test_missing_argument_is_a_usage_error() -> None:
@@ -117,6 +152,7 @@ def test_missing_argument_is_a_usage_error() -> None:
         cwd=str(ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert result.returncode != 0, "a missing CSV argument must be an error"
     assert result.stdout == "", "a usage error must not print a report"
@@ -126,197 +162,293 @@ def test_nonexistent_input_is_an_error_with_empty_stdout() -> None:
     result = run_tool(str(FIXTURES / "does-not-exist.csv"))
     assert result.returncode != 0, "a missing input file must be an error"
     assert result.stdout == "", "a failed run must not print a report"
+    assert result.stderr.strip(), "a failed run must explain itself on stderr"
 
 
-def test_typical_100k_rows_finish_within_the_prose_budget() -> None:
-    # REQ-001's third criterion is a prose goal (no judge checks it), so this
-    # check uses the stated 10-second budget rather than a tight timing.
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".csv", delete=False, newline=""
-    ) as handle:
-        handle.write("assignee,status\n")
-        for index in range(100_000):
-            status = "open" if index % 2 else "closed"
-            handle.write(f"user{index % 50},{status}\n")
-        path = handle.name
-    try:
-        started = time.monotonic()
-        result = run_tool(path)
-        elapsed = time.monotonic() - started
-        assert result.returncode == 0, result.stderr
-        lines = result.stdout.splitlines()
-        assert len(lines) == 51, f"expected 50 assignees + TOTAL, saw {len(lines)}"
-        assert lines[-1] == "TOTAL 50000 50000"
-        assert elapsed < 10.0, (
-            f"100,000 rows took {elapsed:.2f}s, over the 10-second prose goal"
-        )
-    finally:
-        os.unlink(path)
+def test_input_file_is_not_modified() -> None:
+    path = FIXTURES / "mixed.csv"
+    before = path.read_bytes()
+    report_for("mixed.csv")
+    assert path.read_bytes() == before, "summary.sh modified its input file"
 
 
-# --- REQ-002 / AMB-003 / AMB-004: parsing ----------------------------------
-
-
-def test_header_line_is_recognised_and_not_counted() -> None:
-    lines = report_lines("mixed.csv")
-    assert totals_line(lines) == "TOTAL 3 4"
-    names = [parse_assignee_line(line)[0] for line in assignee_lines(lines)]
-    assert "assignee" not in names, "the header line was counted as a ticket"
-    counted = sum(
-        opened + closed
-        for _, opened, closed in map(parse_assignee_line, assignee_lines(lines))
-    )
-    assert counted == 7, f"expected 7 accepted rows from the 7 data rows, got {counted}"
-
-
-def test_header_only_file_reports_zero_totals() -> None:
-    assert report_for("header_only.csv") == "TOTAL 0 0\n"
-
-
-def test_every_accepted_row_is_counted_exactly_once() -> None:
-    _, opened, closed = parse_assignee_line(totals_line(report_lines("mixed.csv")))
-    data_rows = len((FIXTURES / "mixed.csv").read_text().splitlines()) - 1
-    assert opened + closed == data_rows
-
-
-def test_unusable_rows_are_skipped_without_affecting_counts() -> None:
-    # skipped.csv: valid `frank` rows are open+closed; the empty assignees,
-    # the `grace,pending` status, the capitalised `Open`, the leading-blank
-    # status, the short row and the empty status are all ignored.
-    assert report_for("skipped.csv") == SKIPPED_REPORT
-
-
-def test_only_exact_lowercase_status_tokens_are_recognised() -> None:
-    lines = report_lines("skipped.csv")
-    assert totals_line(lines) == "TOTAL 1 1"
-    names = [parse_assignee_line(line)[0] for line in assignee_lines(lines)]
-    assert names == ["frank"], f"unusable rows leaked into the report: {names!r}"
-
-
-# --- REQ-003 / AMB-001 / AMB-005: per-assignee lines -----------------------
+# --- REQ-002: header names and RFC 4180 ------------------------------------
 
 
 def test_mixed_per_assignee_open_and_closed_counts() -> None:
-    lines = report_lines("mixed.csv")
-    parsed = [parse_assignee_line(line) for line in assignee_lines(lines)]
-    assert ("alice", 2, 1) in parsed
-    assert ("bob", 0, 3) in parsed
-    assert ("carol", 1, 0) in parsed
+    result = run_tool(str(FIXTURES / "mixed.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == MIXED
+    assert result.stderr == "", "a clean file must not report skipped rows"
 
 
-def test_each_assignee_appears_on_exactly_one_line() -> None:
-    lines = report_lines("mixed.csv")
-    names = [parse_assignee_line(line)[0] for line in assignee_lines(lines)]
-    assert names == ["alice", "bob", "carol"]
-    assert len(names) == len(set(names)), "an assignee was reported twice"
+def test_columns_are_located_by_header_name_not_position() -> None:
+    assert report_for("reordered.csv") == MIXED
+    assert report_for("extra_column.csv") == MIXED
 
 
-def test_assignee_with_one_status_still_prints_both_counts() -> None:
-    # AMB-005: dave is all-open and erin all-closed; the missing count is 0.
-    assert report_for("zero.csv") == ZERO_REPORT
-
-
-# --- REQ-004: totals line --------------------------------------------------
-
-
-def test_exactly_one_totals_line() -> None:
-    lines = report_lines("mixed.csv")
-    totals = [line for line in lines if line.startswith("TOTAL ")]
-    assert len(totals) == 1, f"expected exactly one totals line, saw {totals!r}"
-
-
-def test_totals_equal_the_sum_of_per_assignee_counts() -> None:
-    lines = report_lines("mixed.csv")
-    parsed = [parse_assignee_line(line) for line in assignee_lines(lines)]
-    _, open_total, closed_total = parse_assignee_line(totals_line(lines))
-    assert open_total == sum(opened for _, opened, _ in parsed)
-    assert closed_total == sum(closed for _, _, closed in parsed)
-
-
-def test_totals_are_correct_on_the_zero_count_fixture() -> None:
-    _, open_total, closed_total = parse_assignee_line(
-        totals_line(report_lines("zero.csv"))
-    )
-    assert (open_total, closed_total) == (3, 1)
-
-
-# --- AMB-002: ordering -----------------------------------------------------
-
-
-def test_assignees_are_sorted_by_locale_independent_bytes() -> None:
-    # ASCII bytes order `A` < `Z` < `a` < `b` < `z`, so case is significant
-    # and the layout does not depend on the CSV row order.
-    assert report_for("sorting.csv") == SORTED_REPORT
-
-
-def test_report_order_does_not_depend_on_row_order() -> None:
-    sorted_lines = report_lines("sorting.csv")
-    reversed_fixture = FIXTURES / "sorting-reversed.csv"
-    rows = (FIXTURES / "sorting.csv").read_text().splitlines()
-    reversed_fixture.write_text(
-        "\n".join([rows[0], *reversed(rows[1:])]) + "\n", encoding="utf-8"
+def test_quoted_fields_follow_rfc4180() -> None:
+    path = write_temp_csv(
+        'assignee,status\r\n'
+        '"Smith, Alice",open\r\n'
+        '"Bob ""B"" Jones",closed\r\n'
+        '"Carol\nNewline",open\r\n',
+        newline="",
     )
     try:
-        assert report_lines("sorting-reversed.csv") == sorted_lines
+        result = run_tool(path)
     finally:
-        reversed_fixture.unlink()
+        os.unlink(path)
+    assert result.returncode == 0, result.stderr
+    expected = (
+        'Bob "B" Jones 0 1\n'
+        "Carol\nNewline 1 0\n"
+        "Smith, Alice 1 0\n"
+    )
+    assert result.stdout == expected
+
+
+def test_quoted_assignee_with_a_comma_is_one_assignee() -> None:
+    path = write_temp_csv(
+        "assignee,status\n"
+        '"Smith, Alice",open\n'
+        '"Smith, Alice",closed\n'
+        '"Smith, Alice",open\n'
+    )
+    try:
+        result = run_tool(path)
+    finally:
+        os.unlink(path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'Smith, Alice 2 1\n'
+
+
+def test_header_line_is_not_counted_as_a_ticket() -> None:
+    names = [line.rsplit(" ", 2)[0] for line in lines_of(report_for("mixed.csv"))]
+    assert "assignee" not in names
+    assert "status" not in names
+
+
+# --- REQ-003: counts -------------------------------------------------------
+
+
+def test_every_counted_row_contributes_exactly_once() -> None:
+    parsed = [
+        (name, int(opened), int(closed))
+        for name, opened, closed in (
+            line.rsplit(" ", 2) for line in lines_of(report_for("mixed.csv"))
+        )
+    ]
+    assert sum(opened for _, opened, _ in parsed) == 4
+    assert sum(closed for _, _, closed in parsed) == 4
+    data_rows = len((FIXTURES / "mixed.csv").read_text().splitlines()) - 1
+    assert 4 + 4 == data_rows
+
+
+def test_assignee_with_only_one_status_prints_a_zero() -> None:
+    assert report_for("zero.csv") == ZERO
+
+
+def test_three_open_one_closed_prints_the_required_line() -> None:
+    # REQ-003's own acceptance example.
+    assert "alice 3 1" in lines_of(report_for("mixed.csv"))
+
+
+def test_no_assignee_outside_the_data_is_reported() -> None:
+    names = {line.rsplit(" ", 2)[0] for line in lines_of(report_for("mixed.csv"))}
+    assert names == {"alice", "bob", "carol"}
+
+
+# --- REQ-004: deterministic order -----------------------------------------
+
+
+def test_assignees_are_sorted_by_byte_order() -> None:
+    # ASCII byte order is `A` < `Z` < `a` < `b` < `z`, so case matters.
+    assert report_for("sorting.csv") == SORTED
+
+
+def test_shuffling_data_rows_does_not_change_the_output() -> None:
+    rows = (FIXTURES / "mixed.csv").read_text(encoding="utf-8").splitlines()
+    header, data = rows[0], rows[1:]
+    shuffled = list(data)
+    random.Random(20261108).shuffle(shuffled)
+    path = write_temp_csv("\n".join([header, *shuffled]) + "\n")
+    try:
+        result = run_tool(path)
+    finally:
+        os.unlink(path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == MIXED
+
+
+def test_repeated_runs_are_byte_identical() -> None:
+    first = run_tool(str(FIXTURES / "sorting.csv"))
+    second = run_tool(str(FIXTURES / "sorting.csv"))
+    assert first.returncode == 0 and second.returncode == 0
+    assert first.stdout == second.stdout
+
+
+def test_output_order_is_locale_independent() -> None:
+    path = write_temp_csv("assignee,status\nzoe,open\nzo\u00eb,closed\n")
+    try:
+        result = run_tool(path, extra_env={"LC_ALL": "C", "LANG": "C"})
+    finally:
+        os.unlink(path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "zoe 1 0\nzo\u00eb 0 1\n"
+
+
+# --- REQ-005: no counted rows ---------------------------------------------
+
+
+def test_header_only_file_prints_nothing_and_exits_zero() -> None:
+    result = run_tool(str(FIXTURES / "header_only.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_all_rows_skipped_prints_nothing_and_exits_zero() -> None:
+    result = run_tool(str(FIXTURES / "all_skipped.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert skipped_count(result.stderr) == 4, result.stderr
+
+
+# --- AMB-001: status recognition ------------------------------------------
+
+
+def test_status_is_trimmed_and_case_insensitive() -> None:
+    result = run_tool(str(FIXTURES / "status_variants.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 2 1\n"
+    assert result.stderr == ""
+
+
+def test_unrecognised_status_is_skipped_and_counted_on_stderr() -> None:
+    result = run_tool(str(FIXTURES / "unknown_status.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 1 1\n"
+    assert skipped_count(result.stderr) == 1, result.stderr
+
+
+def test_assignee_seen_only_in_skipped_rows_gets_no_line() -> None:
+    # REQ-005 + AMB-001/AMB-003: an assignee whose only rows were skipped must
+    # not be invented with zero counts.
+    result = run_tool(str(FIXTURES / "unknown_only.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 1 0\n"
+    assert "zed" not in result.stdout
+    assert skipped_count(result.stderr) == 2, result.stderr
+
+
+# --- AMB-002: one line per assignee ---------------------------------------
+
+
+def test_one_line_per_assignee_with_both_counts_and_nothing_else() -> None:
+    lines = lines_of(report_for("mixed.csv"))
+    assert len(lines) == 3, f"expected one line per assignee, saw {lines!r}"
+    for line in lines:
+        assert len(line.rsplit(" ", 2)) == 3, f"unexpected line shape: {line!r}"
+    assert not any(line.startswith("TOTAL") for line in lines)
+    assert len({line.rsplit(" ", 2)[0] for line in lines}) == len(lines)
+
+
+# --- AMB-003: malformed rows and bad headers ------------------------------
+
+
+def test_skipped_rows_are_counted_on_stderr_and_do_not_change_counts() -> None:
+    result = run_tool(str(FIXTURES / "skipped.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == SKIPPED
+    assert skipped_count(result.stderr) == 5, result.stderr
+    assert totals_of(result.stdout) == (2, 1), "only the three good rows count"
+
+
+def test_empty_assignee_rows_are_skipped_and_counted() -> None:
+    result = run_tool(str(FIXTURES / "empty_assignee.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 1 0\n"
+    assert skipped_count(result.stderr) == 2, result.stderr
+
+
+def test_empty_status_rows_are_skipped_and_counted() -> None:
+    result = run_tool(str(FIXTURES / "empty_status.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 1 0\n"
+    assert skipped_count(result.stderr) == 2, result.stderr
+
+
+def test_short_rows_are_skipped_and_counted() -> None:
+    result = run_tool(str(FIXTURES / "short_row.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 1 0\n"
+    assert skipped_count(result.stderr) == 1, result.stderr
+
+
+def test_header_without_required_columns_stops_the_run() -> None:
+    result = run_tool(str(FIXTURES / "bad_header.csv"))
+    assert result.returncode != 0, "a header without the required columns must fail"
+    assert result.stdout == ""
+    assert "assignee" in result.stderr and "status" in result.stderr, result.stderr
+
+
+def test_empty_file_stops_the_run() -> None:
+    path = write_temp_csv("")
+    try:
+        result = run_tool(path)
+    finally:
+        os.unlink(path)
+    assert result.returncode != 0, "an empty file has no usable header"
+    assert result.stdout == ""
+    assert result.stderr.strip()
+
+
+# --- AMB-004: assignee normalisation --------------------------------------
+
+
+def test_assignee_is_trimmed_but_case_is_preserved() -> None:
+    result = run_tool(str(FIXTURES / "assignee_trim.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Alice 1 1\nalice 1 0\n"
 
 
 TESTS = [
-    test_entry_point_sits_at_the_repository_root,
-    test_first_argument_is_the_csv_path_and_exit_is_zero,
+    test_entry_point_and_delivered_files_exist,
+    test_documented_invocation_on_the_sample_file,
+    test_runs_without_interactive_input_or_network,
     test_relative_path_works_from_the_repository_root,
-    test_input_file_is_not_modified,
     test_missing_argument_is_a_usage_error,
     test_nonexistent_input_is_an_error_with_empty_stdout,
-    test_typical_100k_rows_finish_within_the_prose_budget,
-    test_header_line_is_recognised_and_not_counted,
-    test_header_only_file_reports_zero_totals,
-    test_every_accepted_row_is_counted_exactly_once,
-    test_unusable_rows_are_skipped_without_affecting_counts,
-    test_only_exact_lowercase_status_tokens_are_recognised,
+    test_input_file_is_not_modified,
     test_mixed_per_assignee_open_and_closed_counts,
-    test_each_assignee_appears_on_exactly_one_line,
-    test_assignee_with_one_status_still_prints_both_counts,
-    test_exactly_one_totals_line,
-    test_totals_equal_the_sum_of_per_assignee_counts,
-    test_totals_are_correct_on_the_zero_count_fixture,
-    test_assignees_are_sorted_by_locale_independent_bytes,
-    test_report_order_does_not_depend_on_row_order,
+    test_columns_are_located_by_header_name_not_position,
+    test_quoted_fields_follow_rfc4180,
+    test_quoted_assignee_with_a_comma_is_one_assignee,
+    test_header_line_is_not_counted_as_a_ticket,
+    test_every_counted_row_contributes_exactly_once,
+    test_assignee_with_only_one_status_prints_a_zero,
+    test_three_open_one_closed_prints_the_required_line,
+    test_no_assignee_outside_the_data_is_reported,
+    test_assignees_are_sorted_by_byte_order,
+    test_shuffling_data_rows_does_not_change_the_output,
+    test_repeated_runs_are_byte_identical,
+    test_output_order_is_locale_independent,
+    test_header_only_file_prints_nothing_and_exits_zero,
+    test_all_rows_skipped_prints_nothing_and_exits_zero,
+    test_status_is_trimmed_and_case_insensitive,
+    test_unrecognised_status_is_skipped_and_counted_on_stderr,
+    test_assignee_seen_only_in_skipped_rows_gets_no_line,
+    test_one_line_per_assignee_with_both_counts_and_nothing_else,
+    test_skipped_rows_are_counted_on_stderr_and_do_not_change_counts,
+    test_empty_assignee_rows_are_skipped_and_counted,
+    test_empty_status_rows_are_skipped_and_counted,
+    test_short_rows_are_skipped_and_counted,
+    test_header_without_required_columns_stops_the_run,
+    test_empty_file_stops_the_run,
+    test_assignee_is_trimmed_but_case_is_preserved,
 ]
 
 
-def main() -> int:
-    results = []
-    for test in TESTS:
-        try:
-            test()
-            results.append((test.__name__, True, ""))
-        except Exception as exc:  # noqa: BLE001 - every failure is a TAP result
-            detail = str(exc) or exc.__class__.__name__
-            results.append((test.__name__, False, detail))
-
-    out_lines = ["TAP version 13"]
-    for number, (name, passed, detail) in enumerate(results, start=1):
-        out_lines.append(("ok" if passed else "not ok") + f" {number} - {name}")
-        if not passed:
-            for detail_line in detail.splitlines():
-                out_lines.append(f"  # {detail_line}")
-    out_lines.append(f"1..{len(results)}")
-    passed_count = sum(1 for _, passed, _ in results if passed)
-    out_lines.append(f"# tests {len(results)}")
-    out_lines.append(f"# pass {passed_count}")
-    out_lines.append(f"# fail {len(results) - passed_count}")
-    text = "\n".join(out_lines) + "\n"
-
-    tap_path = Path(os.environ.get("TAP_OUT", "reports/tests.tap"))
-    if not tap_path.is_absolute():
-        tap_path = ROOT / tap_path
-    tap_path.parent.mkdir(parents=True, exist_ok=True)
-    tap_path.write_text(text, encoding="utf-8")
-    sys.stdout.write(text)
-    return 0 if passed_count == len(results) else 1
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_tests(TESTS, "reports/tests.tap"))
