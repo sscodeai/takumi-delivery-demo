@@ -1,33 +1,46 @@
 # Decisions and where they live
 
-Requirement: `docs/requirements/intake.yaml` (confirmed 2026-11-03 under the
-standing authorization `docs/authorizations/SA-002.yaml`). Delivery:
-`bash passrate.sh {csv}`.
+Requirement: `docs/requirements/intake.yaml` (confirmed 2026-11-08 under the
+standing authorization `docs/authorizations/SA-002.yaml`, digest recorded in the
+document's front matter). Delivery: `bash summary.sh {csv}`.
 
 Every `AMB-nnn` in that document is recorded here with the answer taken and the
-`file:line` anchors that enact it. `grep -rn 'AMB-00' .` finds the same one-line
-comments in the source.
+`file:line` anchors that enact it. `grep -rn 'AMB-00' summary.py
+tests/test_summary.py` finds the same one-line comments in the source.
 
 ## Provenance
 
-All three answers were taken from the document's own `default:` under the signed
+All five answers were taken from the document's own `default:` under the signed
 standing authorization recorded in its front matter (`method:
-standing-authorization`, `ref: docs/authorizations/SA-002.yaml`, signed by SS,
-expires 2026-11-11). They are **DEFAULTED** — a machine's guess, not a person's
-choice — and are therefore the rows a reviewer may most plausibly want to
-revisit. REL-001 and DIFF-001 mechanise AMB-001; REQ-005 and REQ-006 carry
-AMB-002 and AMB-003 as requirement text.
+standing-authorization`, signed by SS, expires 2026-11-11). They are
+**DEFAULTED** -- a machine's guess, not a person's choice -- so all five are the
+rows a reviewer may most plausibly want to revisit.
 
 | id | question (one line) | answer | provenance | anchored at |
 | --- | --- | --- | --- | --- |
-| AMB-001 | How is the one-decimal percentage rounded on an exact half? | `half-up`: round half away from zero, so 96.05 becomes 96.1 | DEFAULTED (`default:`) — mechanised by REL-001 / DIFF-001 | rule comment `passrate.py:136`, exact integer scaling `passrate.py:135`, the `>=` that sends a half up `passrate.py:139`, exactly one printed decimal `passrate.py:141`; tests `tests/test_passrate.py:433`, `tests/test_passrate.py:439`, `tests/test_passrate.py:445`, `tests/test_passrate.py:451`, `tests/test_units.py:146` |
-| AMB-002 | When the same suite name appears on several rows, which occurrence wins? | `merge`: every row of that suite counts, so passed and total are summed into one line | DEFAULTED (`default:`) — requirement text REQ-005 | rule comment `passrate.py:205`, passed sum `passrate.py:207`, total sum `passrate.py:208`; one line printed per distinct suite at `passrate.py:215`; tests `tests/test_passrate.py:376`, `tests/test_passrate.py:460`, `tests/test_units.py:170` |
-| AMB-003 | What happens to a data row that cannot yield a percentage? | `skip-count`: skip the row, exclude it from the totals, report it on a `SKIPPED` line | DEFAULTED (`default:`) — requirement text REQ-006 | malformed definition `passrate.py:110` (field count `passrate.py:116`, non-integer/negative counts `passrate.py:120`, zero total `passrate.py:122`), rule comment `passrate.py:195`, `skipped += 1` `passrate.py:198`, the `SKIPPED` line `passrate.py:228`; tests `tests/test_passrate.py:407`, `tests/test_passrate.py:470`, `tests/test_passrate.py:482`, `tests/test_units.py:191` |
+| AMB-001 | What happens to an unusable data row? | `skip-count`: skip it, exclude it from every aggregate, print `SKIPPED <skipped-count>` | DEFAULTED (`default:`) -- mechanised by REL-001 | rule comment `summary.py:195`, unusable-row definition `summary.py:98` (field count `summary.py:107`, blank region `summary.py:93`, non-plain amount `summary.py:112`), `skipped += 1` `summary.py:198`, the `SKIPPED` line `summary.py:240`; tests `tests/test_summary.py:316`, `tests/test_summary.py:323`, `tests/test_summary.py:362`, `tests/test_summary.py:371` |
+| AMB-002 | When a region key repeats, what does the report do? | `merge`: every row is its own order, all rows of the region form one aggregate | DEFAULTED (`default:`) -- requirement text REQ-005 | rule comments `summary.py:203` and `summary.py:208`, first-row insert `summary.py:205`, count/sum accumulation `summary.py:207`, `summary.py:210`; one line per distinct region `summary.py:217`; tests `tests/test_summary.py:391`, `tests/test_summary.py:513` |
+| AMB-003 | How do sums and means round past the second decimal? | `half-up`: round half away from zero at the second decimal place | DEFAULTED (`default:`) -- mechanised by DIFF-001 | rule comment `summary.py:156`, exact-remainder comparison `summary.py:158`, rounding routine `summary.py:145`, sum use `summary.py:222`, mean use `summary.py:223`; tests `tests/test_summary.py:426`, `tests/test_summary.py:431`, `tests/test_summary.py:444`, `tests/test_summary.py:618`, `tests/test_summary.py:566` |
+| AMB-004 | How is the amount field parsed? | `plain-decimal`: optional sign, digits, optional fraction; nothing else -- no symbol/thousands/percent stripping, no surrounding-blank stripping | DEFAULTED (`default:`) | regex `summary.py:44` with rule comment `summary.py:40`, parser `summary.py:72`, applied to the row `summary.py:112`; tests `tests/test_summary.py:591`, `tests/test_summary.py:596`, `tests/test_summary.py:323`, `tests/test_summary.py:348` |
+| AMB-005 | Is the region key normalised before grouping? | `exact`: the region field is used verbatim, so case and spacing distinguish regions | DEFAULTED (`default:`) | rule comment `summary.py:89`, verbatim return `summary.py:95`, used as the group key at `summary.py:202`; tests `tests/test_summary.py:406`, `tests/test_summary.py:601` |
 
-## Where the declared relations are checked
+The output shape rows in the deliverable block are enacted by `summary.py:224`
+(region line), `summary.py:235` (TOTAL line) and `summary.py:240` (SKIPPED
+line); `TOTAL` is printed only once and after every region line.
 
-| relation | checked by |
-| --- | --- |
-| REL-001 derived-ratio (AMB-001) | `tests/test_passrate.py` `rel_001_every_percentage_matches_its_own_printed_counts` (recomputes each printed percentage from that line's own printed passed/total, half-up) |
-| DIFF-001 independent recomputation (AMB-001) | `tests/test_passrate.py` `diff_001_an_independent_pass_yields_the_same_lines`, `diff_001_totals_are_the_sum_of_the_counted_rows` |
-| mutation-detection | `npx stryker run --reporters json` → `node_modules/.bin/stryker` → `mutation/mutation.py` (18 mutants on `passrate.py`, real `bash run-tests.sh` runs; exit non-zero on a survivor) |
+## Rounding versus additivity
+
+REL-003 says the printed per-region sums add up to the printed `TOTAL` sum,
+while REQ-006 says a region's sum is its own raw total rounded. Those can only
+disagree for sub-cent inputs (two regions of `0.005` each). The `TOTAL` sum is
+therefore the sum of the already-rounded region sums (`summary.py:231`,
+`summary.py:235`), so REL-003 holds exactly for every input; per-region values
+still follow REQ-006 and AMB-003 literally. The check is
+`tests/test_summary.py:513`.
+
+## Inheritance from the previous delivery
+
+This repository also carries the previous request's `passrate.sh` / `passrate.py`
+with `tests/test_passrate.py`, `tests/test_units.py` and the mutation harness.
+They are a different deliverable and were left in place; `bash run-tests.sh`
+still runs them. This document describes only the `summary.sh` delivery.
