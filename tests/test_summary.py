@@ -164,6 +164,14 @@ def req_001_reads_the_path_substituted_as_the_first_argument():
     assert second_out.stdout.splitlines() == ["South 1 2.00 2.00", "TOTAL 1 2.00"]
 
 
+def req_001_a_relative_path_is_resolved_from_the_repository_root():
+    path = csv_file("North,1.00\n", "relative.csv")
+    relative = os.path.relpath(path, ROOT)
+    result = run([relative])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["North 1 1.00 1.00", "TOTAL 1 1.00"]
+
+
 def req_001_header_row_is_never_a_data_row():
     # Header names differ in case and surrounding whitespace (REQ-001).
     lines, result = report(" REGION ,\tAmount \nNorth,120.50\nNorth,99.50\n")
@@ -229,6 +237,14 @@ def req_001_a_utf8_bom_does_not_hide_the_header():
     result = run([path])
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["North 1 1.50 1.50", "TOTAL 1 1.50"]
+
+
+def req_001_non_utf8_input_is_a_fatal_error_on_stderr():
+    path = csv_bytes(b"\xff\xfe\n", "nonutf8.csv")
+    result = run([path])
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert result.stderr != ""
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +485,9 @@ def req_006_every_printed_number_matches_the_shape():
         assert match, line
         assert NUMBER.match(match.group(3)) and NUMBER.match(match.group(4)), line
         assert "," not in line and "e" not in line.lower().split(" ")[0], line
+    total = TOTAL_LINE.match(total_lines(lines)[0])
+    assert total, lines
+    assert NUMBER.match(total.group(2)), total.group(2)
 
 
 def req_006_sum_is_the_rounded_total_of_raw_amounts():
@@ -526,6 +545,13 @@ def rel_003_region_counts_and_sums_add_up_to_the_total():
 # ---------------------------------------------------------------------------
 
 
+def independent_cents_text(cents):
+    """Format an integer cent count without using summary.py's formatter."""
+    sign = "-" if cents < 0 else ""
+    magnitude = abs(cents)
+    return "%s%d.%02d" % (sign, magnitude // 100, magnitude % 100)
+
+
 def independent_report(text):
     """Recompute the expected report without using summary.py's arithmetic."""
     rows = text.splitlines()
@@ -537,10 +563,11 @@ def independent_report(text):
     groups = {}
     skipped = 0
     for row in rows:
-        if "," not in row:
+        fields = row.split(",")
+        if len(fields) != 2:
             skipped += 1
             continue
-        region, amount = row.split(",")
+        region, amount = fields
         if region.strip() == "" or not re.match(r"^[+-]?[0-9]+(\.[0-9]+)?$", amount):
             skipped += 1
             continue
@@ -553,11 +580,20 @@ def independent_report(text):
     for region in sorted(groups, key=lambda name: name.encode("utf-8")):
         count, raw = groups[region]
         cents = int((raw * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
-        mean = (raw / count).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        lines.append("%s %d %s %.2f" % (region, count, summary.format_cents(cents), mean))
+        mean = (raw / count) * 100
+        mean_cents = int(mean.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+        lines.append(
+            "%s %d %s %s"
+            % (
+                region,
+                count,
+                independent_cents_text(cents),
+                independent_cents_text(mean_cents),
+            )
+        )
         total_count += count
         total_cents += cents
-    lines.append("TOTAL %d %s" % (total_count, summary.format_cents(total_cents)))
+    lines.append("TOTAL %d %s" % (total_count, independent_cents_text(total_cents)))
     if skipped:
         lines.append("SKIPPED %d" % skipped)
     return lines
@@ -575,6 +611,28 @@ def diff_001_random_two_decimal_files_match_an_independent_recomputation():
                     generator.choice(regions),
                     generator.randint(0, 500),
                     generator.randint(0, 99),
+                )
+            )
+        text = "\n".join(rows) + "\n"
+        lines, result = report(text)
+        assert result.returncode == 0, result.stderr
+        assert lines == independent_report(text), (text, lines)
+
+
+def diff_001_random_three_decimal_files_match_an_independent_recomputation():
+    generator = random.Random(314159)
+    regions = ["North", "South", "East", "West", "north", "N orth"]
+    for trial in range(8):
+        rows = ["region,amount"]
+        for _ in range(generator.randint(1, 12)):
+            sign = generator.choice(["", "", "-"])
+            rows.append(
+                "%s,%s%d.%03d"
+                % (
+                    generator.choice(regions),
+                    sign,
+                    generator.randint(0, 200),
+                    generator.randint(0, 999),
                 )
             )
         text = "\n".join(rows) + "\n"
@@ -631,10 +689,51 @@ def unit_format_cents_never_prints_negative_zero():
     assert summary.format_cents(-1) == "-0.01"
 
 
+def unit_parse_row_accepts_usable_records():
+    from fractions import Fraction
+
+    assert summary.parse_row(["North", "1.005"]) == ("North", Fraction(201, 200))
+    assert summary.parse_row([" North ", "5"]) == (" North ", Fraction(5))
+    assert summary.parse_row(["A", "-0.00"]) == ("A", Fraction(0))
+
+
+def unit_parse_row_rejects_unusable_records():
+    for record in (
+        summary.MALFORMED,
+        ["only-one-field"],
+        ["A", "1", "extra"],
+        ["", "1"],
+        ["   ", "1"],
+        ["A", "abc"],
+    ):
+        assert summary.parse_row(record) is None, record
+
+
+def unit_format_value_rounds_halves_away_from_zero():
+    from fractions import Fraction
+
+    assert summary.format_value(Fraction(5, 1000)) == "0.01"
+    assert summary.format_value(Fraction(-5, 1000)) == "-0.01"
+    assert summary.format_value(Fraction(4, 1000)) == "0.00"
+    assert summary.format_value(Fraction(1, 3)) == "0.33"
+
+
+def unit_summarise_emits_skipped_only_when_needed():
+    assert summary.summarise([["region", "amount"], ["A", "1"]]) == [
+        "A 1 1.00 1.00",
+        "TOTAL 1 1.00",
+    ]
+    assert summary.summarise([["region", "amount"], ["A", "bad"]]) == [
+        "TOTAL 0 0.00",
+        "SKIPPED 1",
+    ]
+
+
 TESTS = [
     ("req_001_declared_sample_report_is_exact", req_001_declared_sample_report_is_exact),
     ("req_001_entry_point_sits_at_the_repository_root", req_001_entry_point_sits_at_the_repository_root),
     ("req_001_reads_the_path_substituted_as_the_first_argument", req_001_reads_the_path_substituted_as_the_first_argument),
+    ("req_001_a_relative_path_is_resolved_from_the_repository_root", req_001_a_relative_path_is_resolved_from_the_repository_root),
     ("req_001_header_row_is_never_a_data_row", req_001_header_row_is_never_a_data_row),
     ("req_001_header_only_file_is_exactly_one_line", req_001_header_only_file_is_exactly_one_line),
     ("req_001_stdout_carries_only_declared_shapes", req_001_stdout_carries_only_declared_shapes),
@@ -644,6 +743,7 @@ TESTS = [
     ("req_001_a_quoted_region_containing_a_comma_stays_one_field", req_001_a_quoted_region_containing_a_comma_stays_one_field),
     ("req_001_crlf_input_is_read_normally", req_001_crlf_input_is_read_normally),
     ("req_001_a_utf8_bom_does_not_hide_the_header", req_001_a_utf8_bom_does_not_hide_the_header),
+    ("req_001_non_utf8_input_is_a_fatal_error_on_stderr", req_001_non_utf8_input_is_a_fatal_error_on_stderr),
     ("req_002_acceptance_example_is_exact", req_002_acceptance_example_is_exact),
     ("req_002_count_is_an_integer_and_numbers_have_two_decimals", req_002_count_is_an_integer_and_numbers_have_two_decimals),
     ("req_002_one_line_per_distinct_region_and_no_absent_region", req_002_one_line_per_distinct_region_and_no_absent_region),
@@ -676,6 +776,7 @@ TESTS = [
     ("req_007_repeating_decimal_mean_is_order_independent", req_007_repeating_decimal_mean_is_order_independent),
     ("rel_003_region_counts_and_sums_add_up_to_the_total", rel_003_region_counts_and_sums_add_up_to_the_total),
     ("diff_001_random_two_decimal_files_match_an_independent_recomputation", diff_001_random_two_decimal_files_match_an_independent_recomputation),
+    ("diff_001_random_three_decimal_files_match_an_independent_recomputation", diff_001_random_three_decimal_files_match_an_independent_recomputation),
     ("unit_parse_amount_accepts_plain_decimals", unit_parse_amount_accepts_plain_decimals),
     ("unit_parse_amount_rejects_everything_else", unit_parse_amount_rejects_everything_else),
     ("unit_parse_region_keeps_the_key_verbatim", unit_parse_region_keeps_the_key_verbatim),
@@ -683,6 +784,10 @@ TESTS = [
     ("unit_looks_like_header_matches_case_and_blanks", unit_looks_like_header_matches_case_and_blanks),
     ("unit_rounded_cents_rounds_halves_away_from_zero", unit_rounded_cents_rounds_halves_away_from_zero),
     ("unit_format_cents_never_prints_negative_zero", unit_format_cents_never_prints_negative_zero),
+    ("unit_parse_row_accepts_usable_records", unit_parse_row_accepts_usable_records),
+    ("unit_parse_row_rejects_unusable_records", unit_parse_row_rejects_unusable_records),
+    ("unit_format_value_rounds_halves_away_from_zero", unit_format_value_rounds_halves_away_from_zero),
+    ("unit_summarise_emits_skipped_only_when_needed", unit_summarise_emits_skipped_only_when_needed),
 ]
 
 
