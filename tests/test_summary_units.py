@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Unit tests for the rules behind the ticket summary.
 
-These import ``summary.py`` directly and check the helpers the CLI composes.
-The TAP report is written to ``reports/tests-summary-units.tap`` (or
-``$TAP_OUT``).
+These import ``summary.py`` directly and pin the helpers the CLI composes:
+header resolution, assignee normalisation, status classification, the skip
+accounting and the report layout.  The TAP report is written to
+``reports/tests-units.tap`` (or ``$TAP_OUT``).
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from _tap import ROOT, run_tests  # noqa: E402  (path is set up above)
 import summary  # noqa: E402  (path is set up above)
 
 
@@ -24,10 +27,16 @@ def test_resolve_columns_reads_the_declared_order() -> None:
 
 def test_resolve_columns_follows_names_not_positions() -> None:
     assert summary.resolve_columns(["status", "assignee"]) == (1, 0)
+    assert summary.resolve_columns(["id", "assignee", "status", "x"]) == (1, 2)
+
+
+def test_resolve_columns_normalises_the_header_cell() -> None:
+    assert summary.resolve_columns([" Assignee ", "STATUS"]) == (0, 1)
+    assert summary.resolve_columns(["\ufeffassignee", "status"]) == (0, 1)
 
 
 def test_resolve_columns_rejects_a_missing_column() -> None:
-    for header in (["assignee"], ["status"], ["id", "state"]):
+    for header in (["assignee"], ["status"], ["id", "state"], []):
         try:
             summary.resolve_columns(header)
         except summary.InputError:
@@ -35,81 +44,106 @@ def test_resolve_columns_rejects_a_missing_column() -> None:
         raise AssertionError(f"header {header!r} should be rejected")
 
 
-def test_summarise_counts_both_statuses_per_assignee() -> None:
-    counts = summary.summarise(
-        [("alice", "open"), ("alice", "closed"), ("bob", "closed")]
+def test_classify_status_trims_and_folds_case() -> None:
+    assert summary.classify_status("open") == "open"
+    assert summary.classify_status(" OPEN ") == "open"
+    assert summary.classify_status("Closed") == "closed"
+    assert summary.classify_status("closed\t") == "closed"
+
+
+def test_classify_status_rejects_anything_else() -> None:
+    for value in ("pending", "", "   ", "openx", "closedish", "re-opened"):
+        assert summary.classify_status(value) is None, value
+
+
+def test_normalise_assignee_trims_but_keeps_case() -> None:
+    assert summary.normalise_assignee("  Alice \t") == "Alice"
+    assert summary.normalise_assignee("alice") == "alice"
+    assert summary.normalise_assignee("Alice") != summary.normalise_assignee("alice")
+
+
+def test_summarise_records_counts_both_statuses() -> None:
+    counts, skipped = summary.summarise_records(
+        ["assignee", "status"],
+        [
+            ["alice", "open"],
+            ["alice", "closed"],
+            ["bob", "closed"],
+        ],
     )
     assert counts == {"alice": [1, 1], "bob": [0, 1]}
+    assert skipped == 0
 
 
-def test_summarise_skips_an_empty_assignee() -> None:
-    counts = summary.summarise([("", "open"), ("", "closed"), ("ann", "open")])
-    assert counts == {"ann": [1, 0]}
-
-
-def test_summarise_skips_unrecognised_statuses() -> None:
-    counts = summary.summarise(
+def test_summarise_records_skips_every_malformed_row() -> None:
+    counts, skipped = summary.summarise_records(
+        ["assignee", "status"],
         [
-            ("ann", "open"),
-            ("ann", "Open"),
-            ("ann", "OPEN"),
-            ("ann", " open"),
-            ("ann", "closed "),
-            ("ann", ""),
-            ("ann", "pending"),
-        ]
+            ["alice", "open"],
+            [" alice ", " CLOSED "],
+            ["", "open"],
+            ["bob", ""],
+            ["carol", "pending"],
+            ["dave"],
+        ],
     )
-    assert counts == {"ann": [1, 0]}
+    assert counts == {"alice": [1, 1]}
+    assert skipped == 4
 
 
-def test_summarise_keeps_a_zero_slot_for_a_single_status_assignee() -> None:
-    counts = summary.summarise([("open-only", "open"), ("closed-only", "closed")])
-    assert counts["open-only"] == [1, 0]
-    assert counts["closed-only"] == [0, 1]
+def test_summarise_records_honours_named_column_order() -> None:
+    counts, skipped = summary.summarise_records(
+        ["status", "assignee"],
+        [["open", "alice"], ["closed", "alice"]],
+    )
+    assert counts == {"alice": [1, 1]}
+    assert skipped == 0
 
 
-def test_format_report_sorts_by_utf8_bytes() -> None:
+def test_summarise_records_counts_each_row_once() -> None:
+    counts, skipped = summary.summarise_records(
+        ["assignee", "status"],
+        [["ann", "open"], ["ann", "open"], ["ann", "closed"]],
+    )
+    assert counts == {"ann": [2, 1]}
+    assert skipped == 0
+    assert sum(counts["ann"]) == 3
+
+
+def test_format_report_sorts_by_utf8_bytes_and_prints_both_counts() -> None:
     counts = {"zoe": [1, 0], "Alice": [1, 0], "alice": [0, 1], "Bob": [0, 1]}
-    lines = summary.format_report(counts)
-    assert [line.rsplit(" ", 2)[0] for line in lines[:-1]] == [
-        "Alice",
-        "Bob",
-        "alice",
-        "zoe",
+    assert summary.format_report(counts) == [
+        "Alice 1 0",
+        "Bob 0 1",
+        "alice 0 1",
+        "zoe 1 0",
     ]
 
 
-def test_format_report_prints_exactly_one_total_line() -> None:
-    lines = summary.format_report({"ann": [2, 3]})
-    assert lines == ["ann 2 3", "TOTAL 2 3"]
+def test_format_report_of_no_counts_is_empty() -> None:
+    assert summary.format_report({}) == []
 
 
-def test_format_report_of_an_empty_count_is_zero_totals() -> None:
-    assert summary.format_report({}) == ["TOTAL 0 0"]
+def test_summarise_file_accepts_a_utf8_bom() -> None:
+    handle = tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False)
+    with handle:
+        handle.write(b"\xef\xbb\xbfassignee,status\nann,open\n")
+    path = handle.name
+    try:
+        counts, skipped = summary.summarise_file(path)
+    finally:
+        os.unlink(path)
+    assert counts == {"ann": [1, 0]}
+    assert skipped == 0
 
 
-def test_format_report_totals_are_the_sums_of_the_lines() -> None:
-    lines = summary.format_report({"ann": [2, 3], "bob": [0, 4]})
-    parsed = [line.rsplit(" ", 2) for line in lines[:-1]]
-    assert int(lines[-1].rsplit(" ", 2)[1]) == sum(int(p[1]) for p in parsed)
-    assert int(lines[-1].rsplit(" ", 2)[2]) == sum(int(p[2]) for p in parsed)
-
-
-def test_read_rows_skips_a_row_that_is_too_short() -> None:
-    fixture = Path(__file__).resolve().parent / "fixtures" / "skipped.csv"
-    rows = summary.read_rows(str(fixture))
-    assert ("frank", "open") in rows
-    assert all(len(pair) == 2 for pair in rows)
-
-
-def test_read_rows_rejects_an_empty_file() -> None:
-    import tempfile
-
-    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as handle:
-        path = handle.name
+def test_summarise_file_rejects_an_empty_file() -> None:
+    handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
+    path = handle.name
+    handle.close()
     try:
         try:
-            summary.read_rows(path)
+            summary.summarise_file(path)
         except summary.InputError:
             return
         raise AssertionError("an empty file should be an InputError")
@@ -117,78 +151,33 @@ def test_read_rows_rejects_an_empty_file() -> None:
         os.unlink(path)
 
 
-def test_read_rows_rejects_a_missing_file() -> None:
+def test_summarise_file_rejects_a_missing_file() -> None:
     try:
-        summary.read_rows(str(ROOT / "tests" / "fixtures" / "absent.csv"))
+        summary.summarise_file(str(ROOT / "tests" / "fixtures" / "absent.csv"))
     except summary.InputError:
         return
     raise AssertionError("a missing file should be an InputError")
 
 
-def test_read_rows_accepts_a_utf8_bom_header() -> None:
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(
-        "wb", suffix=".csv", delete=False
-    ) as handle:
-        handle.write(b"\xef\xbb\xbfassignee,status\nann,open\n")
-        path = handle.name
-    try:
-        assert summary.read_rows(path) == [("ann", "open")]
-    finally:
-        os.unlink(path)
-
-
 TESTS = [
     test_resolve_columns_reads_the_declared_order,
     test_resolve_columns_follows_names_not_positions,
+    test_resolve_columns_normalises_the_header_cell,
     test_resolve_columns_rejects_a_missing_column,
-    test_summarise_counts_both_statuses_per_assignee,
-    test_summarise_skips_an_empty_assignee,
-    test_summarise_skips_unrecognised_statuses,
-    test_summarise_keeps_a_zero_slot_for_a_single_status_assignee,
-    test_format_report_sorts_by_utf8_bytes,
-    test_format_report_prints_exactly_one_total_line,
-    test_format_report_of_an_empty_count_is_zero_totals,
-    test_format_report_totals_are_the_sums_of_the_lines,
-    test_read_rows_skips_a_row_that_is_too_short,
-    test_read_rows_rejects_an_empty_file,
-    test_read_rows_rejects_a_missing_file,
-    test_read_rows_accepts_a_utf8_bom_header,
+    test_classify_status_trims_and_folds_case,
+    test_classify_status_rejects_anything_else,
+    test_normalise_assignee_trims_but_keeps_case,
+    test_summarise_records_counts_both_statuses,
+    test_summarise_records_skips_every_malformed_row,
+    test_summarise_records_honours_named_column_order,
+    test_summarise_records_counts_each_row_once,
+    test_format_report_sorts_by_utf8_bytes_and_prints_both_counts,
+    test_format_report_of_no_counts_is_empty,
+    test_summarise_file_accepts_a_utf8_bom,
+    test_summarise_file_rejects_an_empty_file,
+    test_summarise_file_rejects_a_missing_file,
 ]
 
 
-def main() -> int:
-    results = []
-    for test in TESTS:
-        try:
-            test()
-            results.append((test.__name__, True, ""))
-        except Exception as exc:  # noqa: BLE001 - every failure is a TAP result
-            detail = str(exc) or exc.__class__.__name__
-            results.append((test.__name__, False, detail))
-
-    out = ["TAP version 13"]
-    for number, (name, passed, detail) in enumerate(results, start=1):
-        out.append(("ok" if passed else "not ok") + f" {number} - {name}")
-        if not passed:
-            for detail_line in detail.splitlines():
-                out.append(f"  # {detail_line}")
-    out.append(f"1..{len(results)}")
-    passed_count = sum(1 for _, passed, _ in results if passed)
-    out.append(f"# tests {len(results)}")
-    out.append(f"# pass {passed_count}")
-    out.append(f"# fail {len(results) - passed_count}")
-    text = "\n".join(out) + "\n"
-
-    tap_path = Path(os.environ.get("TAP_OUT", "reports/tests-summary-units.tap"))
-    if not tap_path.is_absolute():
-        tap_path = ROOT / tap_path
-    tap_path.parent.mkdir(parents=True, exist_ok=True)
-    tap_path.write_text(text, encoding="utf-8")
-    sys.stdout.write(text)
-    return 0 if passed_count == len(results) else 1
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_tests(TESTS, "reports/tests-units.tap"))

@@ -26,7 +26,7 @@ jobs:
       - name: run the delivered mutation check
         run: |
           set -o pipefail
-          bash tests/mutation.sh 2>&1 | tail -60
+          bash mutation/run.sh 2>&1 | tail -60
   deliverable:
     runs-on: ubuntu-latest
     steps:
@@ -34,10 +34,10 @@ jobs:
       - name: run the deliverable as the requirement document declares
         run: |
           set -o pipefail
-          timeout 10s bash -c 'bash summary.sh tests/fixtures/mixed.csv' || {
+          timeout 30s bash -c 'bash summary.sh sample/tickets.csv' || {
             rc=$?
             if [ "$rc" = 124 ]; then
-              echo 'the deliverable command did not exit within 10s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh tests/fixtures/mixed.csv' >&2
+              echo 'the deliverable command did not exit within 30s and was killed, so this job fails instead of waiting out the runner'\''s own limit: bash summary.sh sample/tickets.csv' >&2
             fi
             exit "$rc"
           }

@@ -4,49 +4,43 @@
 These checks cover the acceptance criteria that are about the *delivery*
 rather than about one invocation of the tool:
 
-  REQ-005  ``bash run-tests.sh`` writes readable TAP with no failures, and the
-           report asserts the per-assignee counts, the zero-count case and the
-           totals line;
-  REQ-006  the mutation harness declares mutants and its report has the
-           documented survivors shape;
-  REQ-007  the README names every ambiguity and says the decisions are pending
-           human sign-off and are not checked by a judge.
+  REQ-006  ``bash run-tests.sh`` writes readable TAP with no failures, and the
+           report asserts the counting, single-status, shuffling, header-only
+           and AMB-nnn cases;
+  REQ-007  ``mutation/run.sh`` declares mutants, and its report has the
+           documented survivors shape with no survivor;
+  ADR-060  ``docs/decisions.md`` anchors every AMB-nnn answer in the source,
+           and the source carries greppable ``AMB-00n`` comments.
 
 They run after the acceptance and unit suites in ``run-tests.sh`` so the TAP
-reports they read already exist.  The report for this suite is written to
+reports they read already exist.  This suite's own report is written to
 ``reports/tests-contract.tap`` (or ``$CONTRACT_TAP_OUT``).
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
 from pathlib import Path
 from typing import List, Sequence
 
-ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _tap import ROOT, run_tests  # noqa: E402  (path is set up above)
 
-import mutation_runner  # noqa: E402  (path is set up above)
-
-AMBIGUITIES = {
-    "AMB-001": "one-line: one line per assignee carrying both the open count and the closed count",
-    "AMB-002": "alphabetical: assignees sorted by name, locale-independent byte order",
-    "AMB-003": "exact: only the lowercase tokens `open` and `closed` are recognised",
-    "AMB-004": "skip: the row is ignored and the run continues, without affecting either count",
-    "AMB-005": "explicit-zero: the missing category is printed as 0",
-}
+AMBIGUITIES = ("AMB-001", "AMB-002", "AMB-003", "AMB-004")
 
 REQUIRED_ACCEPTANCE_CHECKS = (
-    "test_header_line_is_recognised_and_not_counted",
     "test_mixed_per_assignee_open_and_closed_counts",
-    "test_assignee_with_one_status_still_prints_both_counts",
-    "test_totals_equal_the_sum_of_per_assignee_counts",
-    "test_exactly_one_totals_line",
-    "test_only_exact_lowercase_status_tokens_are_recognised",
-    "test_assignees_are_sorted_by_locale_independent_bytes",
-    "test_every_accepted_row_is_counted_exactly_once",
+    "test_assignee_with_only_one_status_prints_a_zero",
+    "test_shuffling_data_rows_does_not_change_the_output",
+    "test_header_only_file_prints_nothing_and_exits_zero",
+    "test_status_is_trimmed_and_case_insensitive",
+    "test_one_line_per_assignee_with_both_counts_and_nothing_else",
+    "test_skipped_rows_are_counted_on_stderr_and_do_not_change_counts",
+    "test_header_without_required_columns_stops_the_run",
+    "test_assignee_is_trimmed_but_case_is_preserved",
 )
 
 
@@ -61,7 +55,13 @@ def acceptance_tap_path() -> Path:
 
 def unit_tap_path() -> Path:
     tap = acceptance_tap_path()
-    return tap.with_name(tap.name[: -len(".tap")] + "-summary-units.tap")
+    return tap.with_name(tap.name[: -len(".tap")] + "-units.tap")
+
+
+def read_text(relative: str) -> str:
+    path = ROOT / relative
+    assert path.is_file(), f"missing required file: {relative}"
+    return path.read_text(encoding="utf-8")
 
 
 def read_tap(path: Path) -> List[str]:
@@ -91,32 +91,34 @@ def result_names(lines: Sequence[str]) -> List[str]:
     return names
 
 
-def read_text(relative: str) -> str:
-    path = ROOT / relative
-    assert path.is_file(), f"missing required file: {relative}"
-    return path.read_text(encoding="utf-8")
+def load_mutation_harness():
+    path = ROOT / "mutation" / "run.py"
+    assert path.is_file(), "mutation/run.py is missing"
+    spec = importlib.util.spec_from_file_location("mutation_run", path)
+    assert spec and spec.loader, f"cannot load {path}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-# --- REQ-005: the delivered test entry point -------------------------------
+# --- REQ-006: the delivered test entry point -------------------------------
 
 
 def test_run_tests_entry_point_runs_the_delivered_suites() -> None:
     script = read_text("run-tests.sh")
-    assert "tests/test_summary.py" in script
-    assert "tests/test_summary_units.py" in script
-    assert "tests/test_contract.py" in script
-    assert "reports/tests.tap" in script
+    for name in (
+        "tests/test_summary.py",
+        "tests/test_summary_units.py",
+        "tests/test_contract.py",
+        "reports/tests.tap",
+    ):
+        assert name in script, f"run-tests.sh does not mention {name}"
 
 
 def test_acceptance_tap_report_is_readable_and_has_no_failures() -> None:
     lines = read_tap(acceptance_tap_path())
     failures = [line for line in lines if line.startswith("not ok ")]
     assert not failures, f"acceptance report contains failures: {failures!r}"
-    names = result_names(lines)
-    for required in REQUIRED_ACCEPTANCE_CHECKS:
-        assert required in names, (
-            f"acceptance report does not assert {required}"
-        )
 
 
 def test_acceptance_report_has_ok_lines_for_each_required_behaviour() -> None:
@@ -147,29 +149,36 @@ def test_unit_tap_report_is_readable_and_has_no_failures() -> None:
     assert result_names(lines), "unit report contains no checks"
 
 
-# --- REQ-006: the mutation check -------------------------------------------
+# --- REQ-007: the mutation check -------------------------------------------
 
 
-def test_mutation_harness_declares_mutants() -> None:
-    assert len(mutation_runner.MUTANTS) > 0, "the mutation check has no mutants"
-    ids = [str(mutant["id"]) for mutant in mutation_runner.MUTANTS]
+def test_mutation_entry_point_and_mutants_exist() -> None:
+    script = read_text("mutation/run.sh")
+    assert "mutation/run.py" in script, "mutation/run.sh must run mutation/run.py"
+    module = load_mutation_harness()
+    assert len(module.MUTANTS) > 0, "the mutation harness has no mutants"
+    ids = [str(mutant["id"]) for mutant in module.MUTANTS]
     assert len(ids) == len(set(ids)), f"duplicate mutant ids: {ids!r}"
-    for mutant in mutation_runner.MUTANTS:
-        assert str(mutant.get("target", "summary.py")) in {
-            "summary.py",
-            "summary.sh",
-        }, f"unknown mutation target in {mutant['id']}"
+    for mutant in module.MUTANTS:
+        assert str(mutant.get("target")) in {"summary.py", "summary.sh"}, (
+            f"unknown mutation target in {mutant['id']}"
+        )
         assert str(mutant["description"]).strip(), (
             f"mutant {mutant['id']} has no description"
         )
         assert mutant.get("edits"), f"mutant {mutant['id']} has no edits"
 
 
+def test_mutation_report_path_matches_the_requirement() -> None:
+    module = load_mutation_harness()
+    assert Path(module.REPORT) == ROOT / "reports" / "mutation" / "mutation.json"
+
+
 def test_mutation_report_has_the_documented_shape() -> None:
     report_path = ROOT / "reports" / "mutation" / "mutation.json"
     if not report_path.is_file():
-        # The report is produced by `bash tests/mutation.sh`, which the smoke
-        # gate runs separately; there is nothing to validate in a fresh copy.
+        # Produced by `bash mutation/run.sh`, which the pipeline runs
+        # separately; a fresh copy has nothing to validate yet.
         return
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert isinstance(report, dict), "mutation report is not a JSON object"
@@ -188,35 +197,7 @@ def test_mutation_report_has_the_documented_shape() -> None:
     )
 
 
-def test_mutation_report_path_matches_the_requirement() -> None:
-    assert mutation_runner.REPORT == (
-        ROOT / "reports" / "mutation" / "mutation.json"
-    )
-
-
-# --- REQ-007: the documented decisions -------------------------------------
-
-
-def test_readme_names_every_ambiguity_and_its_status() -> None:
-    readme = read_text("README.md")
-    for ambiguity in AMBIGUITIES:
-        assert ambiguity in readme, f"README does not name {ambiguity}"
-    lowered = readme.lower()
-    assert "pending human sign-off" in lowered, (
-        "README must state that the decisions are pending human sign-off"
-    )
-    assert "no judge checks" in lowered, (
-        "README must state that no judge checks the pending decisions"
-    )
-
-
-def test_readme_records_the_default_taken_for_each_ambiguity() -> None:
-    readme = read_text("README.md")
-    for ambiguity, chosen in AMBIGUITIES.items():
-        token = chosen.split(":", 1)[0]
-        assert token in readme, (
-            f"README does not record the `{token}` default for {ambiguity}"
-        )
+# --- ADR-060: the decision record ------------------------------------------
 
 
 def test_decisions_document_maps_every_ambiguity_to_source() -> None:
@@ -231,16 +212,33 @@ def test_decisions_document_maps_every_ambiguity_to_source() -> None:
     )
 
 
-def test_requirement_records_the_implemented_chosen_answers() -> None:
+def test_every_ambiguity_has_a_greppable_source_comment() -> None:
+    source = read_text("summary.py")
+    for ambiguity in AMBIGUITIES:
+        assert ambiguity in source, (
+            f"summary.py has no greppable {ambiguity} comment"
+        )
+
+
+def test_readme_documents_the_shipped_behaviour() -> None:
+    readme = read_text("README.md")
+    for ambiguity in AMBIGUITIES:
+        assert ambiguity in readme, f"README does not name {ambiguity}"
+    assert "sample/tickets.csv" in readme
+    assert "skipped" in readme.lower()
+    assert "mutation/run.sh" in readme
+
+
+def test_requirement_deliverable_matches_the_shipped_commands() -> None:
     requirement = read_text("docs/requirements/intake.yaml")
-    for ambiguity, chosen in AMBIGUITIES.items():
-        assert chosen in requirement, (
-            f"the confirmed requirement does not record {ambiguity}'s answer"
-        )
-        assert requirement.count(chosen) >= 2, (
-            f"{ambiguity}'s answer should appear in both confirmation and "
-            "ambiguities sections"
-        )
+    for expected in (
+        'run: "bash summary.sh {csv}"',
+        'run: "bash run-tests.sh"',
+        'report_path: "reports/tests.tap"',
+        'run: "bash mutation/run.sh"',
+        'report_path: "reports/mutation/mutation.json"',
+    ):
+        assert expected in requirement, f"requirement omits {expected}"
 
 
 def test_test_plan_covers_every_requirement_and_ambiguity() -> None:
@@ -251,13 +249,11 @@ def test_test_plan_covers_every_requirement_and_ambiguity() -> None:
         assert ambiguity in plan, f"test plan omits {ambiguity}"
 
 
-def test_requirement_deliverable_matches_the_shipped_commands() -> None:
-    requirement = read_text("docs/requirements/intake.yaml")
-    assert 'run: "bash summary.sh {csv}"' in requirement
-    assert 'run: "bash run-tests.sh"' in requirement
-    assert 'report_path: "reports/tests.tap"' in requirement
-    assert 'run: "bash tests/mutation.sh"' in requirement
-    assert 'report_path: "reports/mutation/mutation.json"' in requirement
+def test_sample_input_is_shipped() -> None:
+    sample = ROOT / "sample" / "tickets.csv"
+    assert sample.is_file(), "sample/tickets.csv is missing"
+    text = sample.read_text(encoding="utf-8")
+    assert text.splitlines()[0].strip() == "assignee,status"
 
 
 TESTS = [
@@ -266,49 +262,17 @@ TESTS = [
     test_acceptance_report_has_ok_lines_for_each_required_behaviour,
     test_default_acceptance_report_path_is_reports_tests_tap,
     test_unit_tap_report_is_readable_and_has_no_failures,
-    test_mutation_harness_declares_mutants,
-    test_mutation_report_has_the_documented_shape,
+    test_mutation_entry_point_and_mutants_exist,
     test_mutation_report_path_matches_the_requirement,
-    test_readme_names_every_ambiguity_and_its_status,
-    test_readme_records_the_default_taken_for_each_ambiguity,
+    test_mutation_report_has_the_documented_shape,
     test_decisions_document_maps_every_ambiguity_to_source,
-    test_requirement_records_the_implemented_chosen_answers,
-    test_test_plan_covers_every_requirement_and_ambiguity,
+    test_every_ambiguity_has_a_greppable_source_comment,
+    test_readme_documents_the_shipped_behaviour,
     test_requirement_deliverable_matches_the_shipped_commands,
+    test_test_plan_covers_every_requirement_and_ambiguity,
+    test_sample_input_is_shipped,
 ]
 
 
-def main() -> int:
-    results = []
-    for test in TESTS:
-        try:
-            test()
-            results.append((test.__name__, True, ""))
-        except Exception as exc:  # noqa: BLE001 - every failure is a TAP result
-            detail = str(exc) or exc.__class__.__name__
-            results.append((test.__name__, False, detail))
-
-    out = ["TAP version 13"]
-    for number, (name, passed, detail) in enumerate(results, start=1):
-        out.append(("ok" if passed else "not ok") + f" {number} - {name}")
-        if not passed:
-            for detail_line in detail.splitlines():
-                out.append(f"  # {detail_line}")
-    out.append(f"1..{len(results)}")
-    passed_count = sum(1 for _, passed, _ in results if passed)
-    out.append(f"# tests {len(results)}")
-    out.append(f"# pass {passed_count}")
-    out.append(f"# fail {len(results) - passed_count}")
-    text = "\n".join(out) + "\n"
-
-    tap_path = resolve(
-        os.environ.get("CONTRACT_TAP_OUT", "reports/tests-contract.tap")
-    )
-    tap_path.parent.mkdir(parents=True, exist_ok=True)
-    tap_path.write_text(text, encoding="utf-8")
-    sys.stdout.write(text)
-    return 0 if passed_count == len(results) else 1
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_tests(TESTS, "reports/tests-contract.tap"))

@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# run-tests.sh -- run the delivered test suites and write TAP reports.
+# run-tests.sh -- run the delivered test suites and write a TAP report.
 #
 # Usage: bash run-tests.sh
 #
-# The delivery's own suites for the current requirement are
-#   tests/test_summary.py       acceptance: drives `bash summary.sh` against the
-#                               checked-in fixtures in tests/fixtures/ and
-#                               writes reports/tests.tap;
-#   tests/test_summary_units.py unit: imports summary.py and checks the helper
-#                               rules behind every criterion and every AMB-nnn
-#                               decision, writing
-#                               reports/tests-summary-units.tap;
-#   tests/test_contract.py      delivery contract: checks the TAP reports, the
-#                               mutation harness metadata and the README /
-#                               requirement documentation, writing
-#                               reports/tests-contract.tap.
+# The delivery's suites are
+#   tests/test_summary.py        acceptance: drives `bash summary.sh` against
+#                                the checked-in fixtures in tests/fixtures/ and
+#                                writes reports/tests.tap;
+#   tests/test_summary_units.py  unit: imports summary.py and checks the helper
+#                                rules behind every criterion and every AMB-nnn
+#                                decision, writing reports/tests-units.tap;
+#   tests/test_contract.py       delivery contract: checks the TAP reports, the
+#                                mutation harness and the decision record,
+#                                writing reports/tests-contract.tap.
 #
-# The inherited `passrate` and `region` tools from earlier deliveries in this
-# repository are not part of this requirement and are not run here.
+# The inherited `passrate` tool from an earlier delivery in this repository is
+# not part of this requirement and is not run here.
 #
 # TAP_OUT lets the mutation harness point the reports at a throwaway directory,
 # so a mutant run never overwrites the delivered report.
@@ -27,7 +25,7 @@ cd "$(dirname "$0")"
 mkdir -p reports
 
 tap_out="${TAP_OUT:-reports/tests.tap}"
-unit_tap="${tap_out%.tap}-summary-units.tap"
+unit_tap="${tap_out%.tap}-units.tap"
 contract_tap="${tap_out%.tap}-contract.tap"
 
 status=0
@@ -40,13 +38,9 @@ TAP_OUT="$tap_out" CONTRACT_TAP_OUT="$contract_tap" python3 tests/test_contract.
 contract_status=$?
 set -e
 
-if [ "$acceptance_status" -ne 0 ]; then
-  status="$acceptance_status"
-fi
-if [ "$unit_status" -ne 0 ]; then
-  status="$unit_status"
-fi
-if [ "$contract_status" -ne 0 ]; then
-  status="$contract_status"
-fi
+for code in "$acceptance_status" "$unit_status" "$contract_status"; do
+  if [ "$code" -ne 0 ]; then
+    status="$code"
+  fi
+done
 exit "$status"
