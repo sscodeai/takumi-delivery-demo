@@ -66,9 +66,12 @@ bash run-tests.sh
 ```
 
 `tests/test_summary.py` drives the real entry point and covers every acceptance
-criterion and every `AMB-nnn` decision in `docs/requirements/intake.yaml`. The
-report is written to `reports/tests.tap` and echoed to stdout; the runner
-returns non-zero when any check fails. `docs/test-plan.md` maps each acceptance
+criterion and every `AMB-nnn` decision in `docs/requirements/intake.yaml`.
+`tests/test_summary_units.py` imports the implementation and unit-tests the
+helper rules behind the same criteria and decisions, including exact rounding
+and header-resolution edges. The reports are written to `reports/tests.tap` and
+`reports/tests-summary-units.tap` and echoed to stdout; the runner returns
+non-zero when any check fails. `docs/test-plan.md` maps each acceptance
 criterion to the checks that cover it, and `docs/decisions.md` records where
 each decision is implemented (grep `AMB-00` in the source).
 

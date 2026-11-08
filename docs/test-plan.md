@@ -2,9 +2,16 @@
 
 Requirement: `docs/requirements/intake.yaml`. Entry point: `bash summary.sh <csv>`.
 
-`bash run-tests.sh` runs `tests/test_summary.py` into `reports/tests.tap`; every
-check below is executed on every run and the runner exits non-zero when any
-fails. The inherited `passrate` suite is run as well, into
+`bash run-tests.sh` runs two suites for this delivery and exits non-zero when
+any check fails:
+
+* `tests/test_summary.py` -- integration tests that drive the real entry point
+  in a subprocess, written to `reports/tests.tap`;
+* `tests/test_summary_units.py` -- unit tests that import `summary.py` and
+  check the helper rules directly, written to
+  `reports/tests-summary-units.tap`.
+
+The inherited `passrate` suite is run as well, into
 `reports/tests-passrate.tap`, and is not part of this requirement.
 
 ## Acceptance criteria
@@ -52,3 +59,27 @@ fails. The inherited `passrate` suite is run as well, into
 | DIFF-001 | independent recomputation matches every printed line | `diff_001_random_two_decimal_file_matches_recomputation`, `diff_001_random_three_decimal_file_matches_recomputation` |
 | CSV | ordinary CSV shapes are read correctly | `csv_quoted_region_with_comma_is_one_field`, `csv_crlf_input_is_read_normally`, `csv_utf8_bom_does_not_hide_the_header` |
 | REQ-005 | a blank physical line has a wrong field count and is counted | `req_005_a_blank_physical_line_is_a_wrong_field_count_row` |
+
+## Unit coverage
+
+These checks import `summary.py` directly. They cover the same criteria from
+the inside, including values that are awkward to express through a CSV file.
+
+| id | unit checks |
+| --- | --- |
+| REQ-001 | `unit_main_requires_exactly_one_argument`, `unit_main_valid_file_returns_zero_and_the_report` |
+| REQ-002 | `unit_header_columns_resolves_the_declared_order`, `unit_header_columns_resolves_swapped_columns`, `unit_header_columns_ignores_extra_columns`, `unit_header_columns_trims_and_folds_names`, `unit_header_columns_uses_the_first_matching_column`, `unit_header_columns_missing_region_is_fatal`, `unit_header_columns_missing_amount_is_fatal`, `unit_header_columns_missing_both_names_both`, `unit_header_columns_rejects_an_unparsable_header` |
+| REQ-003 | `unit_summarise_declared_sample_is_exact`, `unit_summarise_average_uses_the_unrounded_sum` |
+| REQ-004 | `unit_summarise_total_revenue_is_the_sum_of_printed_region_revenues`, `unit_summarise_total_orders_is_the_sum_of_region_counts`, `unit_summarise_prints_exactly_one_skipped_and_one_total_line` |
+| REQ-005 | `unit_parse_amount_rejects_unreadable_cells`, `unit_read_records_turns_an_unparsable_record_into_the_malformed_sentinel`, `unit_summarise_three_valid_two_malformed`, `unit_summarise_all_malformed_counts_each_row_once`, `unit_summarise_wrong_field_count_is_malformed`, `unit_summarise_blank_region_is_malformed`, `unit_summarise_non_decimal_amount_is_malformed` |
+| REQ-006 | `unit_summarise_merges_every_duplicate_occurrence` |
+| REQ-007 | `unit_round_cents_rounds_an_exact_half_away_from_zero`, `unit_round_cents_rounds_non_halves_by_nearest`, `unit_round_cents_has_no_negative_zero`, `unit_format_cents_prints_exactly_two_decimals`, `unit_format_value_composes_rounding_and_formatting`, `unit_format_value_always_matches_the_declared_shape`, `unit_summarise_never_prints_negative_zero` |
+| REQ-008 | `unit_parse_region_trims_every_ascii_whitespace_character`, `unit_parse_region_keeps_internal_spacing`, `unit_parse_region_is_case_sensitive`, `unit_parse_region_returns_none_for_blank_cells`, `unit_parse_region_does_not_trim_non_ascii_whitespace`, `unit_summarise_region_key_is_trimmed_and_case_sensitive` |
+| REQ-009 | `unit_parse_amount_keeps_negative_and_zero_as_valid_measures`, `unit_summarise_negative_values_stay_valid_and_format_with_a_sign`, `unit_summarise_zero_amounts_are_valid_orders` |
+| REQ-010 | `unit_summarise_header_only_is_an_empty_report` |
+| REQ-011 | `unit_summarise_sorts_region_lines_by_utf8_bytes` |
+| REQ-012 | `unit_main_missing_path_is_fatal_with_empty_stdout`, `unit_main_empty_file_is_fatal_with_empty_stdout`, `unit_summarise_rejects_an_empty_file` |
+| AMB-001 | `unit_summarise_three_valid_two_malformed`, `unit_summarise_all_malformed_counts_each_row_once`, `unit_summarise_wrong_field_count_is_malformed`, `unit_summarise_blank_region_is_malformed`, `unit_summarise_non_decimal_amount_is_malformed`, `unit_read_records_turns_an_unparsable_record_into_the_malformed_sentinel` |
+| AMB-002 | `unit_summarise_merges_every_duplicate_occurrence` |
+| AMB-003 | `unit_parse_amount_accepts_plain_decimals_exactly`, `unit_parse_amount_never_uses_binary_floats`, `unit_round_cents_rounds_an_exact_half_away_from_zero`, `unit_round_cents_rounds_non_halves_by_nearest`, `unit_format_value_composes_rounding_and_formatting`, `unit_format_value_always_matches_the_declared_shape` |
+| AMB-004 | `unit_parse_region_trims_every_ascii_whitespace_character`, `unit_parse_region_is_case_sensitive`, `unit_parse_region_keeps_internal_spacing`, `unit_parse_region_returns_none_for_blank_cells`, `unit_summarise_region_key_is_trimmed_and_case_sensitive` |

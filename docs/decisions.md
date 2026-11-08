@@ -29,7 +29,10 @@ anchors are its only check.
 The output shape rows in the deliverable block are enacted by `summary.py:213`
 (region line), `summary.py:223` (SKIPPED line) and `summary.py:226` (TOTAL
 line). `SKIPPED` is printed even when zero (REQ-005) and `TOTAL` exactly once
-after it (REQ-004).
+after it (REQ-004). Each rule above is also exercised directly in
+`tests/test_summary_units.py`, which imports the implementation instead of
+driving the shell entry point; `docs/test-plan.md` maps those unit checks to the
+same `REQ-nnn` and `AMB-nnn` ids.
 
 ## Rounding versus additivity
 
