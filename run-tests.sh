@@ -4,17 +4,20 @@
 # Usage: bash run-tests.sh
 #
 # The delivery's own suites for the current requirement are
-#   tests/test_summary.py       integration: drives `bash summary.sh` against the
-#                               contract in docs/requirements/intake.yaml
-#                               (region lines, SKIPPED, TOTAL) and writes
-#                               reports/tests.tap;
+#   tests/test_summary.py       acceptance: drives `bash summary.sh` against the
+#                               checked-in fixtures in tests/fixtures/ and
+#                               writes reports/tests.tap;
 #   tests/test_summary_units.py unit: imports summary.py and checks the helper
 #                               rules behind every criterion and every AMB-nnn
-#                               decision, writing reports/tests-summary-units.tap.
-# The inherited suite from the previous delivery in this repository
-# (tests/test_passrate.py plus tests/test_units.py, for passrate.sh) is still
-# run, into reports/tests-passrate.tap, so that tool keeps its coverage; its
-# result also counts toward this runner's exit status.
+#                               decision, writing
+#                               reports/tests-summary-units.tap;
+#   tests/test_contract.py      delivery contract: checks the TAP reports, the
+#                               mutation harness metadata and the README /
+#                               requirement documentation, writing
+#                               reports/tests-contract.tap.
+#
+# The inherited `passrate` and `region` tools from earlier deliveries in this
+# repository are not part of this requirement and are not run here.
 #
 # TAP_OUT lets the mutation harness point the reports at a throwaway directory,
 # so a mutant run never overwrites the delivered report.
@@ -25,25 +28,25 @@ mkdir -p reports
 
 tap_out="${TAP_OUT:-reports/tests.tap}"
 unit_tap="${tap_out%.tap}-summary-units.tap"
-inherited_tap="${tap_out%.tap}-passrate.tap"
+contract_tap="${tap_out%.tap}-contract.tap"
 
 status=0
 set +e
 TAP_OUT="$tap_out" python3 tests/test_summary.py
-summary_status=$?
+acceptance_status=$?
 TAP_OUT="$unit_tap" python3 tests/test_summary_units.py
 unit_status=$?
-TAP_OUT="$inherited_tap" python3 tests/test_passrate.py
-inherited_status=$?
+TAP_OUT="$tap_out" CONTRACT_TAP_OUT="$contract_tap" python3 tests/test_contract.py
+contract_status=$?
 set -e
 
-if [ "$summary_status" -ne 0 ]; then
-  status="$summary_status"
+if [ "$acceptance_status" -ne 0 ]; then
+  status="$acceptance_status"
 fi
 if [ "$unit_status" -ne 0 ]; then
   status="$unit_status"
 fi
-if [ "$inherited_status" -ne 0 ]; then
-  status="$inherited_status"
+if [ "$contract_status" -ne 0 ]; then
+  status="$contract_status"
 fi
 exit "$status"

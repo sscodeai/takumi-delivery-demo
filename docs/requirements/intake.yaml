@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-11-08T13:50:32.205Z"
+  at: "2026-11-08T16:33:05.953Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,206 +10,158 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "What happens to a data row that cannot be read (wrong field count, blank region, non-numeric amount)?"
-      chosen: "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
-      class: malformed-row-accounting
+      question: "How is each assignee's open and closed result laid out on screen?"
+      chosen: "one-line: one line per assignee carrying both the open count and the closed count"
+      class: unmechanised
       policy: document-default
-      checkedAs: skip-count
     - id: AMB-002
-      question: "An identical (region, amount) row appears more than once: is each occurrence its own sales record?"
-      chosen: "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
-      class: duplicate-resolution
+      question: "In what order do the per-assignee results appear?"
+      chosen: "alphabetical: assignees sorted by name, locale-independent byte order"
+      class: unmechanised
       policy: document-default
-      checkedAs: merge
     - id: AMB-003
-      question: "How are revenue and average order value rounded and how many decimals are printed?"
-      chosen: "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
-      class: independent-aggregation
+      question: "Which status values count as open and which as closed?"
+      chosen: "exact: only the lowercase tokens `open` and `closed` are recognised"
+      class: unmechanised
       policy: document-default
-      checkedAs: half-up
     - id: AMB-004
-      question: "Is the region cell compared case-sensitively and with whitespace trimmed, or normalised before grouping?"
-      chosen: "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
+      question: "What happens to a data row with an empty assignee or an unrecognised status?"
+      chosen: "skip: the row is ignored and the run continues, without affecting either count"
+      class: unmechanised
+      policy: document-default
+    - id: AMB-005
+      question: "How is an assignee shown whose tickets are all in one status?"
+      chosen: "explicit-zero: the missing category is printed as 0"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
-    title: "Provide the CSV summary entry point"
-    description: "The repository provides a shell entry point `summary.sh` at its root. `bash summary.sh <path-to-csv>` reads the CSV named by its first argument, writes the report to standard output, and takes no other arguments, no interactive input and no network access. The same command is the one a judge invokes."
+    title: "Provide the summary.sh entry point"
+    description: "The repository must ship `summary.sh` at its root. It is invoked as `bash summary.sh <csv>` and takes the path of the ticket CSV as its first argument. It must use only tooling already available locally, need no network access, and leave the input file untouched."
     acceptance_criteria:
-      - "`bash summary.sh <readable-csv>` exits 0 and writes the report to standard output."
-      - "The script needs exactly one argument, the CSV path; it ignores nothing and reads no other file for its data."
-      - "A fixture of a few thousand rows completes well inside the declared 120000 ms bound."
+      - "`bash summary.sh <csv>` accepts an existing CSV path as `$1` and exits 0 on well-formed input."
+      - "No argument other than the CSV path is required, and the input file is not modified."
+      - "A typical file of 100,000 ticket rows is summarised in under 10 seconds; this is a prose goal and no judge checks it."
     priority: High
-    source: "I want a command-line tool that reads a CSV of sales records"
+    source: "I want a command-line tool that reads a CSV of support tickets"
   - id: REQ-002
-    title: "Resolve the region and amount columns by header name"
-    description: "The first line of the file is a header row naming the columns `region` and `amount`. The tool maps columns by header name, so their order in the file may differ from the declared sample; data rows are comma separated and each row supplies one value per header column."
+    title: "Parse the ticket CSV and count per assignee and status"
+    description: "The first line of the CSV is the header `assignee,status` and is never counted as a ticket. Every remaining row contributes exactly one ticket to the cell identified by its assignee and its status. Open and closed are the two statuses the report distinguishes; how a status value is matched to them is left to AMB-003, and how an unusable row is treated is left to AMB-004. Printed counts are non-negative integers."
     acceptance_criteria:
-      - "A file whose header is `amount,region` with the same data produces the same report as the file whose header is `region,amount`."
-      - "A file whose header lacks either `region` or `amount` exits non-zero with a diagnostic on standard error and prints no report line on standard output."
+      - "The header line is recognised and excluded from all counts."
+      - "Each data row increments exactly one assignee/status cell, so no accepted ticket is counted twice or dropped."
+      - "The two reported categories are open tickets and closed tickets."
     priority: High
-    source: "The CSV has a header row with columns: region, amount."
+    source: "The CSV has a header row with columns: assignee, status."
   - id: REQ-003
-    title: "Print one aggregate line per region"
-    description: "For every distinct region the tool prints exactly one line `<region> <revenue> <average_order_value>`, where revenue is the sum of the amount column over that region's counted rows and average_order_value is that revenue divided by that region's counted rows. Formatting follows REQ-007."
+    title: "Report both open and closed counts for each assignee"
+    description: "For every distinct assignee present in the CSV, the output reports how many of that assignee's tickets are open and how many are closed. An assignee whose tickets are all in one status is still reported, with the other number shown as zero (pending AMB-005 for the exact presentation). The layout of these lines is settled by AMB-001; no judge checks that layout yet."
     acceptance_criteria:
-      - "Every region present in the valid rows appears on exactly one line, and no region absent from the input appears."
-      - "The second field equals the sum of the region's amounts."
-      - "The third field equals the region's sum divided by the number of its counted rows, printed as REQ-007 requires."
+      - "Every distinct assignee in the input appears exactly once in the report."
+      - "An assignee with tickets in both statuses shows both its open count and its closed count."
+      - "An assignee with tickets in only one status is still reported."
+      - "The sum of the per-assignee open counts and the sum of the per-assignee closed counts together equal the number of accepted ticket rows."
     priority: High
-    source: "prints the total revenue and the average order value per region"
+    source: "prints how many tickets each assignee has open and closed"
   - id: REQ-004
-    title: "Print one totals line for the whole file"
-    description: "After the per-region lines the tool prints exactly one totals line `TOTAL <revenue> <orders>`, where revenue is the sum of the amount column over all counted rows and orders is the number of counted rows. This line is printed even when there is no region line."
+    title: "Print a file-wide totals line"
+    description: "After the per-assignee report the tool prints one totals line for the whole file, giving the total number of open tickets and the total number of closed tickets. Those totals must equal the sums of the per-assignee counts, and their sum must equal the number of accepted ticket rows."
     acceptance_criteria:
-      - "The printed totals revenue equals the sum of the printed per-region revenues."
-      - "The printed order count equals the number of rows the tool counted, so it also equals the sum of the per-region row counts."
-      - "Exactly one line beginning with `TOTAL` appears in every successful run."
+      - "Exactly one totals line is printed."
+      - "The totals line reports the open total and the closed total for the whole file."
+      - "Each total equals the sum of the corresponding per-assignee counts."
+      - "The open total plus the closed total equals the number of accepted ticket rows."
     priority: High
-    source: "prints the total revenue ... per region"
+    source: "prints how many tickets each assignee has open and closed"
   - id: REQ-005
-    title: "Skip and count malformed rows"
-    description: "A data row that cannot be read is skipped rather than fatal: wrong field count, blank region cell, or an amount cell that is not a plain decimal number makes the row malformed. A skipped row contributes to no region and is not counted as an order. The tool prints one line `SKIPPED <skipped>` carrying the number of skipped data rows, and still exits 0."
+    title: "Ship the test suite that decides the output"
+    description: "The repository must ship `run-tests.sh` at its root as the delivered test entry point. Running `bash run-tests.sh` exercises `summary.sh` against checked-in CSV fixtures and writes a TAP report to `reports/tests.tap`. The tests must assert the per-assignee open/closed counts, the zero-count case, header handling, and the totals line, and must report `not ok` when the observed counts are wrong."
     acceptance_criteria:
-      - "A file with 3 valid rows and 2 malformed rows prints `SKIPPED 2`, and its region lines and totals line reflect only the 3 valid rows."
-      - "A file whose data rows are all malformed exits 0 and prints `SKIPPED <n>` plus `TOTAL 0.00 0`."
-      - "`SKIPPED 0` is printed when no row is malformed."
+      - "`bash run-tests.sh` exits 0 when the implementation is correct and writes a readable TAP report to `reports/tests.tap`."
+      - "The report contains at least one `ok` line per asserted behaviour and no `not ok` line for a correct implementation."
+      - "The tests assert per-assignee open and closed counts on at least two distinct assignees, the zero-count case, and the totals line."
+      - "A summary.sh that miscounts, swaps open and closed, or omits the totals line makes at least one test report `not ok`."
     priority: High
-    source: "decision AMB-001 (default: skip the row and count it)"
+    source: "I want a command-line tool that reads a CSV of support tickets and prints how many tickets each assignee has open and closed."
   - id: REQ-006
-    title: "Merge every occurrence of a repeated row"
-    description: "Rows are sales records, so an identical (region, amount) pair occurring twice counts twice. Every valid row is merged into the aggregate of its region; nothing is deduplicated, dropped or treated as an error."
+    title: "Ship the mutation check for the delivered tests"
+    description: "The repository must ship `tests/mutation.sh`, runnable as `bash tests/mutation.sh`. It mutates the counting behaviour in `summary.sh` (for example by swapping the open and closed buckets, or by dropping the totals line) and re-runs the delivered tests against each mutant. It writes a tool-agnostic survivors report to `reports/mutation/mutation.json` in the form `{\"total\": <int>, \"survivors\": [{\"file\": \"...\", \"line\": <int>, \"description\": \"...\"}, ...]}`."
     acceptance_criteria:
-      - "Duplicating one valid row raises that region's revenue by the row's amount and its order count by one, and raises the order count on the totals line by one."
-      - "A region is never printed on two lines, however many rows it has."
-    priority: High
-    source: "decision AMB-002 (default: merge)"
+      - "`bash tests/mutation.sh` writes a readable report to `reports/mutation/mutation.json`."
+      - "The report states a total number of mutants greater than zero."
+      - "The delivered test suite fails on every injected mutant, so the survivors list is empty."
+    priority: Medium
+    source: "Derived from the delivery contract: the delivered tests must be able to fail."
   - id: REQ-007
-    title: "Print numbers with two decimals, rounded half away from zero"
-    description: "Revenue and average order value are printed with exactly two decimal places, rounding the value computed from the full-precision input half away from zero. No thousands separators and no currency symbol; a leading minus sign is printed for negative values."
+    title: "Document the deferred decisions without choosing them"
+    description: "The delivered README must list the open decisions AMB-001 through AMB-005 and state plainly that they are pending human sign-off and that no judge checks them yet. The implementation must not hide a choice: if a default is implemented while a question is open, the README says which default was taken."
     acceptance_criteria:
-      - "A region with the single amount 0.125 prints revenue 0.13 and average 0.13, not 0.12."
-      - "A region with the single amount 2.674 prints revenue 2.67."
-      - "Every printed number matches ^-?[0-9]+\\.[0-9]{2}$."
-    priority: High
-    source: "decision AMB-003 (default: half-up at two decimals)"
-  - id: REQ-008
-    title: "Define the region key as the trimmed, case-sensitive cell"
-    description: "The group key is the region cell with surrounding ASCII whitespace trimmed. Comparison is case-sensitive, so `north` and `North` are two regions with two lines, and the printed id is the trimmed text as first seen. This identity rule is recorded for implementers only: no declared relation checks case-sensitivity."
-    acceptance_criteria:
-      - "A file containing both `north` and `North` prints two separate per-region lines."
-      - "A cell written ` north ` is aggregated with `north` and printed as `north`."
+      - "The README names every ambiguity in this document and its current status."
+      - "The README states that the pending presentation and tolerance decisions are not mechanised by a judge."
+      - "No acceptance criterion of REQ-001 through REQ-006 claims a check that the judge does not run."
     priority: Medium
-    source: "decision AMB-004 (default: case-sensitive, trimmed)"
-  - id: REQ-009
-    title: "Treat negative and zero amounts as valid measures"
-    description: "Negative amounts (refunds) and zero amounts are accepted unchanged rather than reported as malformed, so a region's revenue and average may be zero or negative."
-    acceptance_criteria:
-      - "A region with amounts 100.00 and -40.00 prints revenue 60.00 and average 30.00."
-      - "A negative amount never appears in the `SKIPPED` count."
-    priority: Medium
-    source: "sales records whose amount column is the measure"
-  - id: REQ-010
-    title: "Accept a header-only file"
-    description: "A file with a valid header and no data rows is not an error: the tool prints no region line, prints `SKIPPED 0`, then `TOTAL 0.00 0`, and exits 0."
-    acceptance_criteria:
-      - "A header-only file exits 0 and prints exactly the two lines `SKIPPED 0` and `TOTAL 0.00 0`."
-      - "A completely empty file is reported as an error (REQ-012), not as an empty report."
-    priority: Medium
-    source: "the CSV has a header row with columns: region, amount"
-  - id: REQ-011
-    title: "Make the report independent of row order"
-    description: "Per-region lines are sorted by region name in ascending byte order (C locale), followed by the `SKIPPED` line and then the `TOTAL` line, so the report depends only on the multiset of valid rows."
-    acceptance_criteria:
-      - "Two files holding the same valid rows in different order produce byte-identical standard output."
-      - "Region lines appear in ascending byte order of the region name."
-    priority: High
-    source: "the request asks for per-region figures that cannot depend on file order"
-  - id: REQ-012
-    title: "Fail loudly on unusable input"
-    description: "An unreadable path or an empty file exits non-zero with a diagnostic on standard error and prints no report line on standard output. A missing required header column follows REQ-002."
-    acceptance_criteria:
-      - "`bash summary.sh /nonexistent.csv` exits non-zero, writes a message to standard error and nothing to standard output."
-      - "An empty file exits non-zero and prints no `TOTAL` line."
-    priority: Medium
-    source: "a command-line tool over a file whose format is stated"
+    source: "Requirement intake rule: do not silently choose an interpretation and drop the question."
 ambiguities:
   - id: AMB-001
-    question: "What happens to a data row that cannot be read (wrong field count, blank region, non-numeric amount)?"
+    question: "How is each assignee's open and closed result laid out on screen?"
     options:
-      - "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
-      - "skip-silent: skip the row and report nothing about it"
-      - "stop-error: abort the whole run with a non-zero exit on the first bad row"
-    default: "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
-    checkedAs: skip-count
-    blocking: true
-    chosen: "skip-count: skip the row, exclude it from every aggregate, and report how many rows were skipped on a `SKIPPED <n>` line"
-  - id: AMB-002
-    question: "An identical (region, amount) row appears more than once: is each occurrence its own sales record?"
-    options:
-      - "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
-      - "first-row: only the first occurrence of an identical (region, amount) pair is counted"
-      - "error: a repeated identical pair makes the run fail with a non-zero exit"
-    default: "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
-    checkedAs: merge
-    blocking: true
-    chosen: "merge: every occurrence counts as its own reading, so the revenue, the order count and the average all include each repetition"
-  - id: AMB-003
-    question: "How are revenue and average order value rounded and how many decimals are printed?"
-    options:
-      - "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
-      - "truncate: print exactly two decimals, dropping everything past the second decimal (0.125 prints 0.12)"
-    default: "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
-    checkedAs: half-up
-    blocking: true
-    chosen: "half-up: print exactly two decimals, rounding the full-precision value half away from zero (0.125 prints 0.13)"
-  - id: AMB-004
-    question: "Is the region cell compared case-sensitively and with whitespace trimmed, or normalised before grouping?"
-    options:
-      - "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
-      - "case-folded: trim and compare case-insensitively, printing one region under the first-seen spelling"
-    default: "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
+      - "one-line: one line per assignee carrying both the open count and the closed count"
+      - "per-status: two lines per assignee, one for its open count and one for its closed count"
+      - "sections: an OPEN section and a CLOSED section, each listing every assignee"
+    default: "one-line: one line per assignee carrying both the open count and the closed count"
     blocking: false
-    chosen: "exact-trimmed: trim surrounding whitespace and compare case-sensitively, so `north` and `North` are two regions"
+    chosen: "one-line: one line per assignee carrying both the open count and the closed count"
+  - id: AMB-002
+    question: "In what order do the per-assignee results appear?"
+    options:
+      - "alphabetical: assignees sorted by name, locale-independent byte order"
+      - "first-seen: assignees in the order their first ticket appears in the CSV"
+    default: "alphabetical: assignees sorted by name, locale-independent byte order"
+    blocking: false
+    chosen: "alphabetical: assignees sorted by name, locale-independent byte order"
+  - id: AMB-003
+    question: "Which status values count as open and which as closed?"
+    options:
+      - "exact: only the lowercase tokens `open` and `closed` are recognised"
+      - "case-insensitive: `Open`, `OPEN` and surrounding whitespace are accepted and normalised"
+      - "binary: `closed` (any case) is closed and every other non-empty value is open"
+    default: "exact: only the lowercase tokens `open` and `closed` are recognised"
+    blocking: false
+    chosen: "exact: only the lowercase tokens `open` and `closed` are recognised"
+  - id: AMB-004
+    question: "What happens to a data row with an empty assignee or an unrecognised status?"
+    options:
+      - "skip: the row is ignored and the run continues, without affecting either count"
+      - "skip-and-report: the row is ignored and a count of skipped rows is printed alongside the totals"
+      - "stop: the tool prints an error naming the row and exits non-zero"
+    default: "skip: the row is ignored and the run continues, without affecting either count"
+    blocking: false
+    chosen: "skip: the row is ignored and the run continues, without affecting either count"
+  - id: AMB-005
+    question: "How is an assignee shown whose tickets are all in one status?"
+    options:
+      - "explicit-zero: the missing category is printed as 0"
+      - "omit-zero: the missing category is left out of that assignee's line"
+    default: "explicit-zero: the missing category is printed as 0"
+    blocking: false
+    chosen: "explicit-zero: the missing category is printed as 0"
 deliverable:
   run: "bash summary.sh {csv}"
-  timeoutMs: 120000
-  input_format:
-    columns: "region:id,amount:measure"
-    sample: |
-      north,100.00
-      south,50.00
-      north,25.50
-      east,10.25
-  output_format:
-    region_line:
-      shape: "<region> <revenue> <average_order_value>"
-      fields: [id, sum, mean]
-    skipped_line:
-      shape: "SKIPPED <skipped>"
-      fields: [skipped-count]
-    total_line:
-      shape: "TOTAL <revenue> <orders>"
-      fields: [sum, count]
+  timeoutMs: 10000
+  scenarios:
+    - id: SCN-001
+      run: "bash run-tests.sh"
+      expect: "the delivered suite passes: its TAP report shows per-assignee open and closed counts, the zero-count case and the file-wide totals with no failing test"
+      report: tap
+      report_path: "reports/tests.tap"
+      description: "Run the delivered test suite against checked-in CSV fixtures and read its TAP report."
   relations:
     - id: REL-001
-      relation: malformed-row-accounting
-      decides: AMB-001
-      description: "A row that cannot be read is excluded from every aggregate and counted on the SKIPPED line, the way AMB-001 decided."
-    - id: REL-002
-      relation: additivity
-      description: "The per-region revenues sum to the revenue on the printed totals line, and the per-region row counts sum to the printed order count."
-    - id: REL-003
-      relation: duplicate-resolution
-      decides: AMB-002
-      description: "A repeated identical (region, amount) row is counted again in the region aggregate and in the totals, the way AMB-002 decided."
-    - id: REL-004
-      relation: row-order-invariance
-      description: "Shuffling the data rows leaves the printed report byte-identical."
-  differential:
-    - id: DIFF-001
-      anchor: independent-aggregation
-      decides: AMB-003
-      description: "An independent recomputation of each region's revenue and average, and of the file totals, from the same records matches the tool's printed numbers, rounded the way AMB-003 decided."
+      relation: mutation-detection
+      description: "The delivered tests fail when the delivered counting behaviour is mutated."
+  mutation:
+    run: "bash tests/mutation.sh"
+    report_path: "reports/mutation/mutation.json"
+    format: survivors-json
+    max_survivors: 0

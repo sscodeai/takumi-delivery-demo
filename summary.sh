@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# summary.sh -- total revenue and average order value per region.
+# summary.sh -- per-assignee open and closed ticket counts from a CSV.
 #
 # Usage: bash summary.sh <csv>
 #
 # Contract (docs/requirements/intake.yaml, deliverable block):
 #   run:          bash summary.sh {csv}
-#   region line:  <region> <revenue> <average_order_value>
-#   skipped line: SKIPPED <skipped-count>
-#   total line:   TOTAL <revenue> <orders>
+#   assignee line: <assignee> <open-count> <closed-count>
+#   totals line:   TOTAL <open-total> <closed-total>
 #
-# REQ-001: this shell script at the repository root is the single entry point.
-# It takes the CSV path from $1, reads that one file and writes the report to
-# standard output. There is no install or build step: the work happens in
-# summary.py using only the Python 3 standard library, so the command needs no
-# network access.
+# There is no install or build step: the work happens in summary.py using only
+# the Python 3 standard library, so the command needs no network access.  The
+# input file is only ever opened for reading.
 #
 # The decisions this delivery settled live in docs/decisions.md; in the source
 # they are marked with greppable `AMB-00n` comments (see summary.py).
