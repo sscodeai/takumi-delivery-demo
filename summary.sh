@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# summary.sh -- per-assignee open and closed ticket counts from a CSV.
+# summary.sh -- per-region revenue and average order value from a CSV.
 #
 # Usage: bash summary.sh <csv>
 #
 # Contract (docs/requirements/intake.yaml, deliverable block):
 #   run:          bash summary.sh {csv}
-#   assignee line: <assignee> <open-count> <closed-count>
+#   region line:  <region> <count> <sum> <mean>
+#   total line:   TOTAL <count> <sum>
+#   skipped line: SKIPPED <skipped-count>
 #
 # There is no install or build step: the work happens in summary.py using only
 # the Python 3 standard library, so the command needs no network access.  The

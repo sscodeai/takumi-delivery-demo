@@ -1,181 +1,233 @@
 #!/usr/bin/env python3
-"""Unit tests for the rules behind the ticket summary.
+"""Unit tests for the helpers behind ``bash summary.sh``.
 
-These import ``summary.py`` directly and pin the helpers the CLI composes:
-header resolution, assignee normalisation, status classification, the skip
-accounting and the report layout.  The TAP report is written to
-``reports/tests-units.tap`` (or ``$TAP_OUT``).
+These checks import ``summary.py`` directly and exercise one function at a
+time, separate from ``tests/test_summary.py`` (which drives the real entry
+point in subprocesses).  Together the two files are the delivered suite.
+
+Every function returns normally on success and raises ``AssertionError`` on
+failure.  The TAP report is written to ``reports/tests-units.tap`` (override
+with ``TAP_OUT``) by the shared runner.
 """
 
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
+from decimal import Decimal
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+TESTS_DIR = Path(__file__).resolve().parent
+ROOT = TESTS_DIR.parent
+for candidate in (str(TESTS_DIR), str(ROOT)):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
-from _tap import ROOT, run_tests  # noqa: E402  (path is set up above)
 import summary  # noqa: E402  (path is set up above)
+from _tap import run_tests  # noqa: E402
 
 
-def test_resolve_columns_reads_the_declared_order() -> None:
-    assert summary.resolve_columns(["assignee", "status"]) == (0, 1)
+# --- REQ-002: header handling ----------------------------------------------
+
+
+def test_looks_like_header_recognises_the_declared_names() -> None:
+    assert summary.looks_like_header(["region", "amount"]) is True
+    assert summary.looks_like_header(["amount", "region"]) is True
+    assert summary.looks_like_header(["\ufeffRegion", " Amount "]) is True
+
+
+def test_looks_like_header_rejects_a_data_row() -> None:
+    assert summary.looks_like_header(["North", "120.50"]) is False
 
 
 def test_resolve_columns_follows_names_not_positions() -> None:
-    assert summary.resolve_columns(["status", "assignee"]) == (1, 0)
-    assert summary.resolve_columns(["id", "assignee", "status", "x"]) == (1, 2)
+    assert summary.resolve_columns(["region", "amount"]) == (0, 1)
+    assert summary.resolve_columns(["amount", "region"]) == (1, 0)
 
 
-def test_resolve_columns_normalises_the_header_cell() -> None:
-    assert summary.resolve_columns([" Assignee ", "STATUS"]) == (0, 1)
-    assert summary.resolve_columns(["\ufeffassignee", "status"]) == (0, 1)
+def test_resolve_columns_ignores_extra_columns() -> None:
+    assert summary.resolve_columns(["channel", "amount", "region"]) == (2, 1)
 
 
-def test_resolve_columns_rejects_a_missing_column() -> None:
-    for header in (["assignee"], ["status"], ["id", "state"], []):
+def test_resolve_columns_rejects_a_header_without_both_columns() -> None:
+    for header in (["region", "channel"], ["amount", "channel"], ["x"]):
         try:
             summary.resolve_columns(header)
         except summary.InputError:
-            continue
-        raise AssertionError(f"header {header!r} should be rejected")
+            pass
+        else:
+            raise AssertionError(f"header accepted without both columns: {header}")
 
 
-def test_classify_status_trims_and_folds_case() -> None:
-    assert summary.classify_status("open") == "open"
-    assert summary.classify_status(" OPEN ") == "open"
-    assert summary.classify_status("Closed") == "closed"
-    assert summary.classify_status("closed\t") == "closed"
+def test_is_blank_record_treats_empty_and_whitespace_lines_as_blank() -> None:
+    assert summary.is_blank_record([]) is True
+    assert summary.is_blank_record(["", ""]) is True
+    assert summary.is_blank_record(["   ", "\t"]) is True
+    assert summary.is_blank_record(["North", ""]) is False
 
 
-def test_classify_status_rejects_anything_else() -> None:
-    for value in ("pending", "", "   ", "openx", "closedish", "re-opened"):
-        assert summary.classify_status(value) is None, value
+# --- AMB-001 / AMB-004: amount parsing -------------------------------------
 
 
-def test_normalise_assignee_trims_but_keeps_case() -> None:
-    assert summary.normalise_assignee("  Alice \t") == "Alice"
-    assert summary.normalise_assignee("alice") == "alice"
-    assert summary.normalise_assignee("Alice") != summary.normalise_assignee("alice")
+def test_parse_amount_accepts_numeric_forms() -> None:
+    assert summary.parse_amount("120.50") == Decimal("120.50")
+    assert summary.parse_amount(" 7 ") == Decimal("7")
+    assert summary.parse_amount("0") == Decimal("0")
+    assert summary.parse_amount("1e3") == Decimal("1000")
 
 
-def test_summarise_records_counts_both_statuses() -> None:
-    counts, skipped = summary.summarise_records(
-        ["assignee", "status"],
+def test_parse_amount_accepts_negative_refunds() -> None:
+    # AMB-004 (include): a negative amount is a well-formed record.
+    assert summary.parse_amount("-25.00") == Decimal("-25.00")
+
+
+def test_parse_amount_rejects_unusable_values() -> None:
+    for text in ("", "   ", "abc", "1,200", "NaN", "Infinity", "-inf"):
+        assert summary.parse_amount(text) is None, text
+
+
+# --- REQ-003 / REQ-004 / REQ-005: aggregation -------------------------------
+
+
+def test_summarise_records_counts_and_sums_per_region() -> None:
+    counts, totals, skipped = summary.summarise_records(
+        ["region", "amount"],
         [
-            ["alice", "open"],
-            ["alice", "closed"],
-            ["bob", "closed"],
+            ["North", "120.50"],
+            ["North", "99.50"],
+            ["South", "80.25"],
         ],
     )
-    assert counts == {"alice": [1, 1], "bob": [0, 1]}
+    assert counts == {"North": 2, "South": 1}
+    assert totals == {"North": Decimal("220.00"), "South": Decimal("80.25")}
     assert skipped == 0
 
 
-def test_summarise_records_skips_every_malformed_row() -> None:
-    counts, skipped = summary.summarise_records(
-        ["assignee", "status"],
+def test_summarise_records_skips_and_counts_malformed_rows() -> None:
+    # AMB-001 (skip-count): unusable rows never reach the aggregates.
+    counts, totals, skipped = summary.summarise_records(
+        ["region", "amount"],
         [
-            ["alice", "open"],
-            [" alice ", " CLOSED "],
-            ["", "open"],
-            ["bob", ""],
-            ["carol", "pending"],
-            ["dave"],
+            ["North", "abc"],
+            ["", "5.00"],
+            ["South"],
+            ["West", "10.00"],
         ],
     )
-    assert counts == {"alice": [1, 1]}
-    assert skipped == 4
+    assert counts == {"West": 1}
+    assert totals == {"West": Decimal("10.00")}
+    assert skipped == 3
 
 
-def test_summarise_records_honours_named_column_order() -> None:
-    counts, skipped = summary.summarise_records(
-        ["status", "assignee"],
-        [["open", "alice"], ["closed", "alice"]],
+def test_summarise_records_merges_identical_rows() -> None:
+    # AMB-002 (merge): each row is its own order, so nothing is de-duplicated.
+    counts, totals, _ = summary.summarise_records(
+        ["region", "amount"], [["North", "120.50"], ["North", "120.50"]]
     )
-    assert counts == {"alice": [1, 1]}
+    assert counts == {"North": 2}
+    assert totals == {"North": Decimal("241.00")}
+
+
+def test_summarise_records_ignores_blank_rows() -> None:
+    counts, totals, skipped = summary.summarise_records(
+        ["region", "amount"],
+        [[], ["", ""], ["North", "1.00"]],
+    )
+    assert counts == {"North": 1}
+    assert totals == {"North": Decimal("1.00")}
     assert skipped == 0
 
 
-def test_summarise_records_counts_each_row_once() -> None:
-    counts, skipped = summary.summarise_records(
-        ["assignee", "status"],
-        [["ann", "open"], ["ann", "open"], ["ann", "closed"]],
+def test_summarise_records_uses_named_columns() -> None:
+    counts, totals, skipped = summary.summarise_records(
+        ["amount", "channel", "region"],
+        [["1.00", "web", "North"]],
     )
-    assert counts == {"ann": [2, 1]}
+    assert counts == {"North": 1}
+    assert totals == {"North": Decimal("1.00")}
     assert skipped == 0
-    assert sum(counts["ann"]) == 3
 
 
-def test_format_report_sorts_by_utf8_bytes_and_prints_both_counts() -> None:
-    counts = {"zoe": [1, 0], "Alice": [1, 0], "alice": [0, 1], "Bob": [0, 1]}
-    assert summary.format_report(counts) == [
-        "Alice 1 0",
-        "Bob 0 1",
-        "alice 0 1",
-        "zoe 1 0",
+# --- AMB-003 / REQ-006: formatting -----------------------------------------
+
+
+def test_format_amount_prints_exactly_two_decimals() -> None:
+    assert summary.format_amount(Decimal("110")) == "110.00"
+    assert summary.format_amount(Decimal("45")) == "45.00"
+    assert summary.format_amount(Decimal("0")) == "0.00"
+
+
+def test_format_amount_rounds_half_up() -> None:
+    assert summary.format_amount(Decimal("86.3125")) == "86.31"
+    assert summary.format_amount(Decimal("10.005")) == "10.01"
+    assert summary.format_amount(Decimal("2.675")) == "2.68"
+
+
+def test_format_amount_rounds_negative_halves_away_from_zero() -> None:
+    assert summary.format_amount(Decimal("-10.005")) == "-10.01"
+    assert summary.format_amount(Decimal("-2.675")) == "-2.68"
+
+
+def test_format_amount_never_prints_negative_zero() -> None:
+    assert summary.format_amount(Decimal("-0.001")) == "0.00"
+
+
+# --- REQ-003 / REQ-004 / REQ-005: the report --------------------------------
+
+
+def test_format_report_renders_sorted_region_lines_then_total_then_skipped() -> None:
+    counts = {"South": 1, "North": 2, "East": 1}
+    totals = {
+        "South": Decimal("80.25"),
+        "North": Decimal("220.00"),
+        "East": Decimal("45.00"),
+    }
+    assert summary.format_report(counts, totals, 0) == [
+        "East 1 45.00 45.00",
+        "North 2 220.00 110.00",
+        "South 1 80.25 80.25",
+        "TOTAL 4 345.25",
+        "SKIPPED 0",
     ]
 
 
-def test_format_report_of_no_counts_is_empty() -> None:
-    assert summary.format_report({}) == []
+def test_format_report_is_empty_apart_from_total_and_skipped() -> None:
+    assert summary.format_report({}, {}, 0) == ["TOTAL 0 0.00", "SKIPPED 0"]
 
 
-def test_summarise_file_accepts_a_utf8_bom() -> None:
-    handle = tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False)
-    with handle:
-        handle.write(b"\xef\xbb\xbfassignee,status\nann,open\n")
-    path = handle.name
-    try:
-        counts, skipped = summary.summarise_file(path)
-    finally:
-        os.unlink(path)
-    assert counts == {"ann": [1, 0]}
-    assert skipped == 0
+def test_format_report_always_prints_the_skipped_count_last() -> None:
+    lines = summary.format_report({"North": 1}, {"North": Decimal("1.00")}, 7)
+    assert lines[-1] == "SKIPPED 7"
 
 
-def test_summarise_file_rejects_an_empty_file() -> None:
-    handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
-    path = handle.name
-    handle.close()
-    try:
-        try:
-            summary.summarise_file(path)
-        except summary.InputError:
-            return
-        raise AssertionError("an empty file should be an InputError")
-    finally:
-        os.unlink(path)
-
-
-def test_summarise_file_rejects_a_missing_file() -> None:
-    try:
-        summary.summarise_file(str(ROOT / "tests" / "fixtures" / "absent.csv"))
-    except summary.InputError:
-        return
-    raise AssertionError("a missing file should be an InputError")
+def test_format_report_has_no_overall_mean_on_the_total_line() -> None:
+    lines = summary.format_report({"North": 2}, {"North": Decimal("3.00")}, 0)
+    assert lines[-2] == "TOTAL 2 3.00"
+    assert len(lines[-2].split(" ")) == 3
 
 
 TESTS = [
-    test_resolve_columns_reads_the_declared_order,
+    test_looks_like_header_recognises_the_declared_names,
+    test_looks_like_header_rejects_a_data_row,
     test_resolve_columns_follows_names_not_positions,
-    test_resolve_columns_normalises_the_header_cell,
-    test_resolve_columns_rejects_a_missing_column,
-    test_classify_status_trims_and_folds_case,
-    test_classify_status_rejects_anything_else,
-    test_normalise_assignee_trims_but_keeps_case,
-    test_summarise_records_counts_both_statuses,
-    test_summarise_records_skips_every_malformed_row,
-    test_summarise_records_honours_named_column_order,
-    test_summarise_records_counts_each_row_once,
-    test_format_report_sorts_by_utf8_bytes_and_prints_both_counts,
-    test_format_report_of_no_counts_is_empty,
-    test_summarise_file_accepts_a_utf8_bom,
-    test_summarise_file_rejects_an_empty_file,
-    test_summarise_file_rejects_a_missing_file,
+    test_resolve_columns_ignores_extra_columns,
+    test_resolve_columns_rejects_a_header_without_both_columns,
+    test_is_blank_record_treats_empty_and_whitespace_lines_as_blank,
+    test_parse_amount_accepts_numeric_forms,
+    test_parse_amount_accepts_negative_refunds,
+    test_parse_amount_rejects_unusable_values,
+    test_summarise_records_counts_and_sums_per_region,
+    test_summarise_records_skips_and_counts_malformed_rows,
+    test_summarise_records_merges_identical_rows,
+    test_summarise_records_ignores_blank_rows,
+    test_summarise_records_uses_named_columns,
+    test_format_amount_prints_exactly_two_decimals,
+    test_format_amount_rounds_half_up,
+    test_format_amount_rounds_negative_halves_away_from_zero,
+    test_format_amount_never_prints_negative_zero,
+    test_format_report_renders_sorted_region_lines_then_total_then_skipped,
+    test_format_report_is_empty_apart_from_total_and_skipped,
+    test_format_report_always_prints_the_skipped_count_last,
+    test_format_report_has_no_overall_mean_on_the_total_line,
 ]
 
 

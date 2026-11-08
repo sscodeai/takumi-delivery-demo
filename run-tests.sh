@@ -6,7 +6,7 @@
 # The delivery's suites are
 #   tests/test_summary.py        acceptance: drives `bash summary.sh` against
 #                                the checked-in fixtures in tests/fixtures/ and
-#                                writes reports/tests.tap;
+#                                the declared sample, writing reports/tests.tap;
 #   tests/test_summary_units.py  unit: imports summary.py and checks the helper
 #                                rules behind every criterion and every AMB-nnn
 #                                decision, writing reports/tests-units.tap;

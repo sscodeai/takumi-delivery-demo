@@ -1,3 +1,2 @@
-id,state
-1,open
-2,closed
+region,channel
+North,web

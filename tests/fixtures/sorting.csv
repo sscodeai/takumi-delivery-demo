@@ -1,7 +1,4 @@
-assignee,status
-zoe,open
-alice,closed
-Zoe,open
-bob,closed
-Alice,open
- alice ,open
+region,amount
+Zed,1.00
+alpha,2.00
+Beta,3.00

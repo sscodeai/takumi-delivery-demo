@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Mutation harness for the delivered ticket-summary tests.
+"""Mutation harness for the delivered region-summary tests.
 
 Each mutant below is one deliberate defect applied to ``summary.py`` (the
-counting logic that ``summary.sh`` executes) or, for one mutant, to the entry
-point itself.  The harness copies the delivered project into a throwaway
-directory, applies ONE defect, runs the delivered suite
+aggregation and formatting logic that ``summary.sh`` executes) or, for one
+mutant, to the entry point itself.  The harness copies the delivered project
+into a throwaway directory, applies ONE defect, runs the delivered suite
 (``bash run-tests.sh``) against that copy and records whether the suite
 noticed.  A mutant the suite still passes is a SURVIVOR -- a gap in the tests.
 
@@ -41,6 +41,7 @@ COPY_ENTRIES = (
     "tests",
     "sample",
     "docs",
+    "mutation",
     "README.md",
 )
 PER_MUTANT_TIMEOUT_S = 300
@@ -52,160 +53,97 @@ Edit = Tuple[str, str]
 # instead of silently mutating nothing.
 MUTANTS: List[Dict[str, object]] = [
     {
-        "id": "swap-per-assignee-counts",
+        "id": "mean-replaced-by-sum",
         "target": "summary.py",
-        "description": "swap the open and closed counts in every assignee line",
+        "description": "print the region sum where the mean belongs",
         "edits": [
             (
-                '        lines.append(f"{assignee} {opened} {closed}")',
-                '        lines.append(f"{assignee} {closed} {opened}")',
+                'f"{format_amount(_mean(total, count))}"',
+                'f"{format_amount(total)}"',
             )
         ],
     },
     {
-        "id": "reverse-sort-order",
+        "id": "swap-sum-and-mean",
         "target": "summary.py",
-        "description": "sort assignees in descending byte order",
+        "description": "swap the sum and mean fields of every region line",
         "edits": [
             (
-                '    for assignee in sorted(counts, key=lambda name: name.encode("utf-8")):',
-                '    for assignee in sorted(counts, key=lambda name: name.encode("utf-8"), reverse=True):',
+                '            f"{region} {count} {format_amount(total)} "\n'
+                '            f"{format_amount(_mean(total, count))}"',
+                '            f"{region} {count} {format_amount(_mean(total, count))} "\n'
+                '            f"{format_amount(total)}"',
             )
         ],
     },
     {
-        "id": "unsorted-report",
+        "id": "truncate-instead-of-half-up",
         "target": "summary.py",
-        "description": "report assignees in insertion order instead of sorted order",
+        "description": "truncate the mean instead of rounding half up",
         "edits": [
             (
-                '    for assignee in sorted(counts, key=lambda name: name.encode("utf-8")):',
-                "    for assignee in counts:",
+                "rounded = value.quantize(CENT, rounding=ROUND_HALF_UP)",
+                "rounded = value.quantize(CENT, rounding=ROUND_DOWN)",
             )
         ],
     },
     {
-        "id": "wrong-line-separator",
+        "id": "one-decimal-formatting",
         "target": "summary.py",
-        "description": "separate the three fields with two spaces",
+        "description": "print amounts with one decimal place instead of two",
+        "edits": [
+            ('    return format(rounded, "f")', '    return f"{rounded:.1f}"')
+        ],
+    },
+    {
+        "id": "mean-added-to-the-total-line",
+        "target": "summary.py",
+        "description": "add an overall mean to the TOTAL line",
         "edits": [
             (
-                '        lines.append(f"{assignee} {opened} {closed}")',
-                '        lines.append(f"{assignee}  {opened} {closed}")',
+                '    lines.append(f"TOTAL {total_count} {format_amount(total_sum)}")',
+                '    lines.append(f"TOTAL {total_count} {format_amount(total_sum)} '
+                '{format_amount(total_sum)}")',
             )
         ],
     },
     {
-        "id": "status-without-trim",
+        "id": "last-amount-wins",
         "target": "summary.py",
-        "description": "stop trimming whitespace around a status value",
-        "edits": [
-            ("    cleaned = value.strip().lower()", "    cleaned = value.lower()")
-        ],
-    },
-    {
-        "id": "status-without-case-fold",
-        "target": "summary.py",
-        "description": "compare the status value case-sensitively",
-        "edits": [
-            ("    cleaned = value.strip().lower()", "    cleaned = value.strip()")
-        ],
-    },
-    {
-        "id": "unknown-status-is-open",
-        "target": "summary.py",
-        "description": "count an unrecognised status as open instead of skipping it",
-        "edits": [("    return None", "    return OPEN")],
-    },
-    {
-        "id": "closed-counted-as-open",
-        "target": "summary.py",
-        "description": "classify a closed status as open",
+        "description": "keep only the last amount per region instead of adding",
         "edits": [
             (
-                "    if cleaned == CLOSED:\n        return CLOSED",
-                "    if cleaned == CLOSED:\n        return OPEN",
+                "        totals[region] = totals.get(region, Decimal(0)) + amount",
+                "        totals[region] = amount",
             )
         ],
     },
     {
-        "id": "count-empty-assignee",
+        "id": "malformed-not-counted",
         "target": "summary.py",
-        "description": "count rows whose assignee cell is empty",
+        "description": "skip a malformed row without counting it on SKIPPED",
         "edits": [
             (
-                '        if assignee == "":',
-                '        if assignee == "\\x00":',
+                '        if region == "" or amount is None:\n'
+                "            skipped += 1\n"
+                "            continue",
+                '        if region == "" or amount is None:\n'
+                "            continue",
             )
         ],
     },
     {
-        "id": "assignee-without-trim",
+        "id": "blank-lines-counted",
         "target": "summary.py",
-        "description": "keep surrounding whitespace in the assignee name",
-        "edits": [("    return value.strip()", "    return value")],
-    },
-    {
-        "id": "assignee-case-folded",
-        "target": "summary.py",
-        "description": "merge `Alice` and `alice` into one assignee",
-        "edits": [("    return value.strip()", "    return value.strip().lower()")],
-    },
-    {
-        "id": "uncounted-bad-status",
-        "target": "summary.py",
-        "description": "skip an unrecognised status without counting the row",
+        "description": "treat a blank line as a malformed data row",
         "edits": [
             (
-                "        if status is None:\n            skipped += 1\n            continue",
-                "        if status is None:\n            continue",
-            )
-        ],
-    },
-    {
-        "id": "uncounted-empty-assignee",
-        "target": "summary.py",
-        "description": "skip an empty assignee without counting the row",
-        "edits": [
-            (
-                '        if assignee == "":\n            skipped += 1\n            continue',
-                '        if assignee == "":\n            continue',
-            )
-        ],
-    },
-    {
-        "id": "uncounted-short-row",
-        "target": "summary.py",
-        "description": "skip a too-short row without counting it",
-        "edits": [
-            (
-                "        if len(record) <= needed:\n            skipped += 1\n            continue",
-                "        if len(record) <= needed:\n            continue",
-            )
-        ],
-    },
-    {
-        "id": "skip-report-suppressed",
-        "target": "summary.py",
-        "description": "never report the skipped row count on stderr",
-        "edits": [("    if skipped:", "    if False:")],
-    },
-    {
-        "id": "skip-report-always-printed",
-        "target": "summary.py",
-        "description": "print a skipped-row message even when nothing was skipped",
-        "edits": [("    if skipped:", "    if True:")],
-    },
-    {
-        "id": "extra-total-line",
-        "target": "summary.py",
-        "description": "append a file-wide TOTAL line after the assignee lines",
-        "edits": [
-            (
-                '        lines.append(f"{assignee} {opened} {closed}")\n    return lines',
-                '        lines.append(f"{assignee} {opened} {closed}")\n'
-                '    lines.append("TOTAL %d %d" % (sum(p[0] for p in counts.values()), sum(p[1] for p in counts.values())))\n'
-                "    return lines",
+                "    for record in records:\n"
+                "        if is_blank_record(record):\n"
+                "            continue",
+                "    for record in records:\n"
+                "        if False:\n"
+                "            continue",
             )
         ],
     },
@@ -215,60 +153,74 @@ MUTANTS: List[Dict[str, object]] = [
         "description": "ignore the header names and read the first two columns",
         "edits": [
             (
-                '    return positions["assignee"], positions["status"]',
+                '    return positions["region"], positions["amount"]',
                 "    return 0, 1",
             )
         ],
     },
     {
-        "id": "missing-header-tolerated",
+        "id": "unsorted-regions",
         "target": "summary.py",
-        "description": "treat a header without the required columns as column 0",
+        "description": "report regions in insertion order instead of sorted order",
         "edits": [
             (
-                "    if missing:\n"
-                "        raise InputError(\n"
-                '            "header is missing required column(s): " + ", ".join(missing)\n'
-                "        )",
-                "    if missing:\n"
-                "        for name in missing:\n"
-                "            positions[name] = 0",
+                '    for region in sorted(counts, key=lambda name: name.encode("utf-8")):',
+                "    for region in counts:",
             )
         ],
     },
     {
-        "id": "empty-file-is-empty-report",
+        "id": "negative-refund-rejected",
         "target": "summary.py",
-        "description": "treat a file without a header as empty input with exit 0",
+        "description": "reject a negative amount as unusable instead of including it",
         "edits": [
             (
-                "                raise InputError(\n"
-                '                    f"{path} is empty; expected a header naming "\n'
-                "                    + \", \".join(REQUIRED_COLUMNS)\n"
-                "                )",
-                "                return {}, 0",
+                '        if region == "" or amount is None:',
+                '        if region == "" or amount is None or amount < 0:',
             )
         ],
     },
     {
-        "id": "count-header-row",
+        "id": "skipped-line-always-zero",
         "target": "summary.py",
-        "description": "feed the header row to the counter as a data row",
+        "description": "always print SKIPPED 0 regardless of the real count",
         "edits": [
             (
-                "            return summarise_records(header, reader)",
-                "            return summarise_records(header, [header] + list(reader))",
+                '    lines.append(f"SKIPPED {skipped}")',
+                '    lines.append("SKIPPED 0")',
             )
         ],
     },
     {
-        "id": "overwrite-instead-of-increment",
+        "id": "total-count-is-region-count",
         "target": "summary.py",
-        "description": "set each bucket to 1 instead of incrementing it",
+        "description": "put the number of distinct regions on TOTAL instead of records",
         "edits": [
             (
-                "        counts.setdefault(assignee, [0, 0])[slot] += 1",
-                "        counts.setdefault(assignee, [0, 0])[slot] = 1",
+                "    total_count = sum(counts.values())",
+                "    total_count = len(counts)",
+            )
+        ],
+    },
+    {
+        "id": "header-never-detected",
+        "target": "summary.py",
+        "description": "treat a header row as a data row",
+        "edits": [
+            (
+                "            if looks_like_header(first):",
+                "            if False:",
+            )
+        ],
+    },
+    {
+        "id": "header-always-assumed",
+        "target": "summary.py",
+        "description": "treat the first data row of a headerless file as a header",
+        "edits": [
+            (
+                "            if looks_like_header(first):",
+                "            if True:",
             )
         ],
     },
