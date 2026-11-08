@@ -202,6 +202,53 @@ def unit_read_records_reports_an_unreadable_path():
         raise AssertionError("expected a UsageError for a missing file")
 
 
+# --- Additional rule-level edge cases ---------------------------------------
+
+
+def unit_resolve_columns_first_duplicate_name_wins():
+    assert ticket_summary.resolve_columns(
+        ["assignee", "status", "assignee", "status"]
+    ) == (0, 1)
+
+
+def unit_summarise_header_only_is_an_empty_report():
+    counts, skipped = ticket_summary.summarise([["assignee", "status"]])
+    assert counts == {}, counts
+    assert skipped == 0, skipped
+
+
+def unit_summarise_unknown_status_creates_no_assignee_entry():
+    records = [
+        ["assignee", "status"],
+        ["bob", "pending"],
+        ["bob", "in-progress"],
+    ]
+    counts, skipped = ticket_summary.summarise(records)
+    assert counts == {}, counts
+    assert skipped == 2, skipped
+
+
+def unit_render_total_sums_every_assignee_column():
+    counts = {"anna": [2, 1], "ben": [1, 3], "cy": [0, 0]}
+    assert ticket_summary.render(counts) == [
+        "anna 2 1",
+        "ben 1 3",
+        "cy 0 0",
+        "TOTAL 3 4",
+    ]
+
+
+def unit_read_records_handles_crlf_line_endings():
+    path = os.path.join(SANDBOX, "crlf.csv")
+    with open(path, "wb") as handle:
+        handle.write(b"assignee,status\r\nalice,open\r\nbob,closed\r\n")
+    assert ticket_summary.read_records(path) == [
+        ["assignee", "status"],
+        ["alice", "open"],
+        ["bob", "closed"],
+    ]
+
+
 TESTS = [
     ("unit_resolve_columns_reads_declared_positions", unit_resolve_columns_reads_declared_positions),
     (
@@ -235,6 +282,14 @@ TESTS = [
     ("unit_render_of_an_empty_report_is_total_zero", unit_render_of_an_empty_report_is_total_zero),
     ("unit_read_records_honours_quoted_fields", unit_read_records_honours_quoted_fields),
     ("unit_read_records_reports_an_unreadable_path", unit_read_records_reports_an_unreadable_path),
+    ("unit_resolve_columns_first_duplicate_name_wins", unit_resolve_columns_first_duplicate_name_wins),
+    ("unit_summarise_header_only_is_an_empty_report", unit_summarise_header_only_is_an_empty_report),
+    (
+        "unit_summarise_unknown_status_creates_no_assignee_entry",
+        unit_summarise_unknown_status_creates_no_assignee_entry,
+    ),
+    ("unit_render_total_sums_every_assignee_column", unit_render_total_sums_every_assignee_column),
+    ("unit_read_records_handles_crlf_line_endings", unit_read_records_handles_crlf_line_endings),
 ]
 
 

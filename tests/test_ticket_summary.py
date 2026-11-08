@@ -426,6 +426,67 @@ def amb005_quoted_status_field_is_read_as_one_field():
     )
 
 
+# --- Additional acceptance and decision edge cases --------------------------
+
+
+def req002_header_without_both_columns_names_each_missing_column():
+    proc = run_csv("id,team\n1,core\n", "no-both.csv")
+    assert proc.returncode != 0, "expected a non-zero exit, got 0"
+    assert proc.stdout == "", "stdout must stay empty, got %r" % proc.stdout
+    diagnostic = proc.stderr.lower()
+    assert "assignee" in diagnostic and "status" in diagnostic, repr(proc.stderr)
+
+
+def req002_crlf_header_and_rows_produce_the_same_report():
+    crlf = SAMPLE.replace("\n", "\r\n")
+    proc = run_csv(crlf, "crlf.csv")
+    assert proc.returncode == 0, "exit %d, stderr=%r" % (proc.returncode, proc.stderr)
+    assert stdout_lines(proc) == SAMPLE_REPORT, repr(proc.stdout)
+
+
+def req003_internal_spaces_in_an_assignee_are_kept():
+    csv_text = (
+        "assignee,status\n"
+        " John Doe ,open\n"
+        "John Doe,closed\n"
+    )
+    proc = run_csv(csv_text, "internal-space.csv")
+    assert stdout_lines(proc) == ["John Doe 1 1", "TOTAL 1 1"], repr(proc.stdout)
+
+
+def req005_whitespace_only_status_is_not_counted():
+    csv_text = (
+        "assignee,status\n"
+        "alice,open\n"
+        "bob,   \n"
+    )
+    proc = run_csv(csv_text, "blank-status.csv")
+    assert proc.returncode == 0, "skipping must still exit 0, got %d" % proc.returncode
+    assert stdout_lines(proc) == ["alice 1 0", "TOTAL 1 0"], repr(proc.stdout)
+    assert "skipped 1 row" in proc.stderr, repr(proc.stderr)
+
+
+def req006_single_skipped_row_uses_the_singular_diagnostic():
+    csv_text = "assignee,status\nalice,open\nbob,closed,extra\n"
+    proc = run_csv(csv_text, "one-skipped.csv")
+    assert proc.returncode == 0, "exit %d, stderr=%r" % (proc.returncode, proc.stderr)
+    assert "skipped 1 row" in proc.stderr, repr(proc.stderr)
+    assert "skipped 1 rows" not in proc.stderr, repr(proc.stderr)
+
+
+def amb002_skip_count_diagnostic_does_not_leak_into_stdout():
+    csv_text = (
+        "assignee,status\n"
+        "alice,open\n"
+        ",closed\n"
+        "carol,unknown\n"
+    )
+    proc = run_csv(csv_text, "amb002-stdout.csv")
+    assert stdout_lines(proc) == ["alice 1 0", "TOTAL 1 0"], repr(proc.stdout)
+    assert "skipped 2 rows" in proc.stderr, repr(proc.stderr)
+    assert proc.stderr.strip() not in proc.stdout, "diagnostic leaked to stdout"
+
+
 TESTS = [
     ("req001_entry_point_exists_at_repo_root", req001_entry_point_exists_at_repo_root),
     (
@@ -519,6 +580,30 @@ TESTS = [
     (
         "amb005_quoted_status_field_is_read_as_one_field",
         amb005_quoted_status_field_is_read_as_one_field,
+    ),
+    (
+        "req002_header_without_both_columns_names_each_missing_column",
+        req002_header_without_both_columns_names_each_missing_column,
+    ),
+    (
+        "req002_crlf_header_and_rows_produce_the_same_report",
+        req002_crlf_header_and_rows_produce_the_same_report,
+    ),
+    (
+        "req003_internal_spaces_in_an_assignee_are_kept",
+        req003_internal_spaces_in_an_assignee_are_kept,
+    ),
+    (
+        "req005_whitespace_only_status_is_not_counted",
+        req005_whitespace_only_status_is_not_counted,
+    ),
+    (
+        "req006_single_skipped_row_uses_the_singular_diagnostic",
+        req006_single_skipped_row_uses_the_singular_diagnostic,
+    ),
+    (
+        "amb002_skip_count_diagnostic_does_not_leak_into_stdout",
+        amb002_skip_count_diagnostic_does_not_leak_into_stdout,
     ),
 ]
 

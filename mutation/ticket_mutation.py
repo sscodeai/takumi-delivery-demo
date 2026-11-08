@@ -171,7 +171,13 @@ def copy_delivery(directory):
 
 
 def run_suite(directory, timeout):
-    """Run the delivered suite in *directory*; return its exit status."""
+    """Run the delivered suite in *directory*.
+
+    Returns ``(exit_status, failure_reported)`` where *failure_reported* is true
+    when either delivered TAP report contains a ``not ok`` line.  REQ-007
+    requires a deliberately broken implementation to fail with a visible
+    ``not ok`` line, not merely a non-zero exit, so the harness checks both.
+    """
     environment = dict(os.environ)
     environment["TAP_OUT"] = os.path.join(directory, "reports", "tests.tap")
     try:
@@ -184,14 +190,26 @@ def run_suite(directory, timeout):
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return 124
-    return proc.returncode
+        return 124, False
+    failure_reported = False
+    for relative in ("reports/tests.tap", "reports/tests-ticket-units.tap"):
+        try:
+            with open(os.path.join(directory, relative), "r", encoding="utf-8") as handle:
+                if any(
+                    line.lstrip().startswith("not ok")
+                    for line in handle.read().splitlines()
+                ):
+                    failure_reported = True
+        except OSError:
+            continue
+    return proc.returncode, failure_reported
 
 
 def baseline_passes():
     with tempfile.TemporaryDirectory(prefix="ticket-baseline-") as directory:
         copy_delivery(directory)
-        return run_suite(directory, MUTANT_TIMEOUT_S) == 0
+        status, _ = run_suite(directory, MUTANT_TIMEOUT_S)
+        return status == 0
 
 
 def measure(original, mutant):
@@ -203,11 +221,12 @@ def measure(original, mutant):
             raise SystemExit("mutation harness: replacement did not change %s" % TARGET)
         with open(os.path.join(directory, TARGET), "w", encoding="utf-8") as handle:
             handle.write(mutated)
-        status = run_suite(directory, MUTANT_TIMEOUT_S)
+        status, failure_reported = run_suite(directory, MUTANT_TIMEOUT_S)
     return {
         "mutant": mutant,
         "status": status,
-        "killed": status != 0,
+        "failureReported": failure_reported,
+        "killed": status != 0 and failure_reported,
         "durationMs": int((time.monotonic() - started) * 1000),
     }
 
@@ -235,11 +254,15 @@ def main():
             verdict = "killed"
         else:
             verdict = "SURVIVED"
+            if result["status"] != 0 and not result["failureReported"]:
+                reason = "suite failed but wrote no 'not ok' line"
+            else:
+                reason = "suite still passes the mutant"
             survivors.append(
                 {
                     "file": TARGET,
                     "line": mutant["line"],
-                    "description": mutant["description"],
+                    "description": "%s [%s]" % (mutant["description"], reason),
                 }
             )
         print(

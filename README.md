@@ -97,8 +97,9 @@ more), runs `bash run-tests.sh` against each mutant, and writes
 ```
 
 Against the correct implementation every mutant is killed and the survivors
-list is empty. A survivor (a mutant the suite still passes) makes the harness
-exit non-zero.
+list is empty. A survivor (a mutant the suite still passes, or one that fails
+without writing a `not ok` line into the TAP report) makes the harness exit
+non-zero.
 
 ## Continuous integration
 
