@@ -23,6 +23,7 @@ import random
 import subprocess
 import sys
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
@@ -185,14 +186,79 @@ def test_columns_are_located_by_header_name_not_position() -> None:
     assert out_of(result) == SAMPLE_REPORT, out_of(result)
 
 
+def test_reordered_header_matches_the_region_amount_header_byte_for_byte() -> None:
+    # REQ-002: `amount,region` and `region,amount` produce the same report.
+    with tempfile.TemporaryDirectory() as tmp:
+        canonical = write_csv(
+            tmp, "canonical.csv", [("region", "amount"), *DECLARED_SAMPLE]
+        )
+        reordered = write_csv(
+            tmp,
+            "reordered.csv",
+            [("amount", "region"), *[(amount, region) for region, amount in DECLARED_SAMPLE]],
+        )
+        canonical_result = run_tool(str(canonical))
+        reordered_result = run_tool(str(reordered))
+    assert canonical_result.returncode == 0, err_of(canonical_result)
+    assert reordered_result.returncode == 0, err_of(reordered_result)
+    assert out_of(canonical_result) == SAMPLE_REPORT, out_of(canonical_result)
+    assert reordered_result.stdout == canonical_result.stdout, (
+        canonical_result.stdout,
+        reordered_result.stdout,
+    )
+
+
 def test_extra_columns_do_not_change_the_numbers() -> None:
     result = run_tool(str(FIXTURES / "extra_column.csv"))
     assert result.returncode == 0, err_of(result)
     assert out_of(result) == SAMPLE_REPORT, out_of(result)
 
 
+def test_extra_columns_in_any_order_do_not_change_the_numbers() -> None:
+    # REQ-002: the named columns are found wherever they sit; a leading extra
+    # column and a trailing extra column are both irrelevant.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_csv(
+            tmp,
+            "extra.csv",
+            [("channel", "amount", "region", "order")]
+            + [("web", amount, region, "A1") for region, amount in DECLARED_SAMPLE],
+        )
+        result = run_tool(str(path))
+    assert result.returncode == 0, err_of(result)
+    assert out_of(result) == SAMPLE_REPORT, out_of(result)
+
+
 def test_blank_lines_are_neither_records_nor_skipped_rows() -> None:
     result = run_tool(str(FIXTURES / "blank_lines.csv"))
+    assert result.returncode == 0, err_of(result)
+    assert out_of(result) == SAMPLE_REPORT, out_of(result)
+
+
+def test_blank_lines_around_the_declared_sample_do_not_change_the_report() -> None:
+    # REQ-002: blank and whitespace-only lines are ignored wherever they occur.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "blanks.csv"
+        path.write_text(
+            "\n".join(
+                [
+                    "region,amount",
+                    "",
+                    "North,120.50",
+                    "",
+                    "   ",
+                    "South,80.25",
+                    "North,99.50",
+                    "",
+                    "East,45.00",
+                    "",
+                    "",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = run_tool(str(path))
     assert result.returncode == 0, err_of(result)
     assert out_of(result) == SAMPLE_REPORT, out_of(result)
 
@@ -238,8 +304,8 @@ def test_total_count_and_sum_are_additive_over_the_region_lines() -> None:
     lines = report_lines(out_of(result))
     regions = region_lines(out_of(result))
     total_count = sum(int(line.split(" ")[1]) for line in regions)
-    total_sum = sum(int(line.split(" ")[2].replace(".", "")) for line in regions)
-    assert lines[-2] == f"TOTAL {total_count} {total_sum // 100}.{total_sum % 100:02d}", lines
+    total_sum = sum(Decimal(line.split(" ")[2]) for line in regions)
+    assert lines[-2] == f"TOTAL {total_count} {total_sum:.2f}", lines
 
 
 # --- REQ-005: the SKIPPED line ---------------------------------------------
@@ -265,6 +331,8 @@ def test_malformed_rows_are_skipped_counted_and_excluded_from_totals() -> None:
 
 
 def test_two_malformed_rows_are_counted_as_two() -> None:
+    # REQ-005: neither rejected row (the bad amount and the missing amount)
+    # may reach any aggregate, and the final line is exactly `SKIPPED 2`.
     with tempfile.TemporaryDirectory() as tmp:
         path = write_csv(
             tmp,
@@ -278,8 +346,24 @@ def test_two_malformed_rows_are_counted_as_two() -> None:
         )
         result = run_tool(str(path))
     assert result.returncode == 0, err_of(result)
-    assert out_of(result).endswith("TOTAL 1 10.00\nSKIPPED 2\n"), out_of(result)
+    assert out_of(result) == (
+        "North 1 10.00 10.00\nTOTAL 1 10.00\nSKIPPED 2\n"
+    ), out_of(result)
 
+
+def test_missing_amount_field_is_skipped_and_counted() -> None:
+    # AMB-001 (skip-count): a row whose amount field is absent is unusable.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_csv(
+            tmp,
+            "missing_amount.csv",
+            [("region", "amount"), ("North", ""), ("North", "10.00")],
+        )
+        result = run_tool(str(path))
+    assert result.returncode == 0, err_of(result)
+    assert out_of(result) == (
+        "North 1 10.00 10.00\nTOTAL 1 10.00\nSKIPPED 1\n"
+    ), out_of(result)
 
 # --- AMB-001: malformed rows ------------------------------------------------
 
@@ -352,6 +436,35 @@ def test_zero_amount_is_formatted_as_two_decimals() -> None:
     assert out_of(result) == "Zero 1 0.00 0.00\nTOTAL 1 0.00\nSKIPPED 0\n", out_of(result)
 
 
+def test_large_amounts_have_no_thousands_separator_or_currency_symbol() -> None:
+    # REQ-006: sums and means are plain two-decimal numbers.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_csv(
+            tmp,
+            "large.csv",
+            [("region", "amount"), ("Big", "1234567.891"), ("Big", "0.009")],
+        )
+        result = run_tool(str(path))
+    assert result.returncode == 0, err_of(result)
+    assert out_of(result) == (
+        "Big 2 1234567.90 617283.95\nTOTAL 2 1234567.90\nSKIPPED 0\n"
+    ), out_of(result)
+    assert "," not in out_of(result), out_of(result)
+    assert "$" not in out_of(result), out_of(result)
+
+
+def test_counts_and_skipped_count_are_plain_integers() -> None:
+    # REQ-006: counts are integers, never two-decimal amounts.
+    result = run_tool(str(FIXTURES / "malformed.csv"))
+    assert result.returncode == 0, err_of(result)
+    lines = report_lines(out_of(result))
+    counts = [line.split(" ")[1] for line in region_lines(out_of(result))]
+    counts += [lines[-2].split(" ")[1], lines[-1].split(" ")[1]]
+    for count in counts:
+        assert count.isdigit(), count
+        assert str(int(count)) == count, count
+
+
 # --- AMB-004: negative amounts ---------------------------------------------
 
 
@@ -360,6 +473,22 @@ def test_negative_amount_is_included_as_a_refund() -> None:
     assert result.returncode == 0, err_of(result)
     assert out_of(result) == (
         "North 2 75.00 37.50\nTOTAL 2 75.00\nSKIPPED 0\n"
+    ), out_of(result)
+
+
+def test_negative_half_mean_rounds_away_from_zero() -> None:
+    # AMB-004 (include) + AMB-003 (half-up): -20.01 / 2 == -10.005, which
+    # rounds away from zero to -10.01, not toward zero to -10.00.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_csv(
+            tmp,
+            "refund_tie.csv",
+            [("region", "amount"), ("Refund", "-20.01"), ("Refund", "0.00")],
+        )
+        result = run_tool(str(path))
+    assert result.returncode == 0, err_of(result)
+    assert out_of(result) == (
+        "Refund 2 -20.01 -10.01\nTOTAL 2 -20.01\nSKIPPED 0\n"
     ), out_of(result)
 
 
@@ -450,6 +579,15 @@ def test_unreadable_path_is_an_error_with_no_partial_report() -> None:
     assert err_of(result).strip() != "", err_of(result)
 
 
+def test_directory_path_is_an_error_with_no_partial_report() -> None:
+    # REQ-001: a path that cannot be read as a file is a diagnostic, not a
+    # traceback and not a partial report.
+    result = run_tool(str(FIXTURES))
+    assert result.returncode != 0, result.returncode
+    assert result.stdout == b"", result.stdout
+    assert err_of(result).strip() != "", err_of(result)
+
+
 def test_header_without_the_amount_column_stops_the_run() -> None:
     result = run_tool(str(FIXTURES / "bad_header.csv"))
     assert result.returncode != 0, result.returncode
@@ -477,8 +615,11 @@ TESTS = [
     test_region_line_count_equals_distinct_regions,
     test_region_line_has_exactly_four_fields_in_the_declared_shape,
     test_columns_are_located_by_header_name_not_position,
+    test_reordered_header_matches_the_region_amount_header_byte_for_byte,
     test_extra_columns_do_not_change_the_numbers,
+    test_extra_columns_in_any_order_do_not_change_the_numbers,
     test_blank_lines_are_neither_records_nor_skipped_rows,
+    test_blank_lines_around_the_declared_sample_do_not_change_the_report,
     test_region_and_amount_are_trimmed_but_the_region_name_keeps_its_case,
     test_total_line_is_printed_exactly_once_after_the_region_lines,
     test_total_line_carries_only_count_and_sum,
@@ -486,6 +627,7 @@ TESTS = [
     test_skipped_line_is_always_last_and_zero_for_a_clean_file,
     test_malformed_rows_are_skipped_counted_and_excluded_from_totals,
     test_two_malformed_rows_are_counted_as_two,
+    test_missing_amount_field_is_skipped_and_counted,
     test_short_row_is_skipped_and_counted,
     test_empty_region_is_skipped_and_counted,
     test_identical_rows_are_merged_into_the_aggregates,
@@ -493,7 +635,10 @@ TESTS = [
     test_mean_at_an_exact_half_rounds_away_from_zero,
     test_whole_number_mean_is_printed_with_two_decimals,
     test_zero_amount_is_formatted_as_two_decimals,
+    test_large_amounts_have_no_thousands_separator_or_currency_symbol,
+    test_counts_and_skipped_count_are_plain_integers,
     test_negative_amount_is_included_as_a_refund,
+    test_negative_half_mean_rounds_away_from_zero,
     test_shuffling_data_rows_does_not_change_stdout_bytes,
     test_repeated_runs_are_byte_identical,
     test_input_file_is_not_modified,
@@ -503,6 +648,7 @@ TESTS = [
     test_blank_only_file_is_a_valid_empty_report,
     test_missing_argument_is_a_usage_error,
     test_unreadable_path_is_an_error_with_no_partial_report,
+    test_directory_path_is_an_error_with_no_partial_report,
     test_header_without_the_amount_column_stops_the_run,
     test_header_without_the_region_column_stops_the_run,
 ]

@@ -171,6 +171,12 @@ def test_format_amount_never_prints_negative_zero() -> None:
     assert summary.format_amount(Decimal("-0.001")) == "0.00"
 
 
+def test_format_amount_has_no_thousands_separator() -> None:
+    # REQ-006: no thousands separators and no currency symbol.
+    assert summary.format_amount(Decimal("1234567.891")) == "1234567.89"
+    assert summary.format_amount(Decimal("-1234567.891")) == "-1234567.89"
+
+
 # --- REQ-003 / REQ-004 / REQ-005: the report --------------------------------
 
 
@@ -205,6 +211,52 @@ def test_format_report_has_no_overall_mean_on_the_total_line() -> None:
     assert len(lines[-2].split(" ")) == 3
 
 
+def test_format_report_rounds_a_negative_half_mean_away_from_zero() -> None:
+    # AMB-003 (half-up) applies to refunds too: -20.01 / 2 == -10.005.
+    counts, totals, skipped = summary.summarise_records(
+        ["region", "amount"], [["Refund", "-20.01"], ["Refund", "0.00"]]
+    )
+    assert summary.format_report(counts, totals, skipped) == [
+        "Refund 2 -20.01 -10.01",
+        "TOTAL 2 -20.01",
+        "SKIPPED 0",
+    ]
+
+
+# --- REQ-001 / REQ-009: whole-file reading ---------------------------------
+
+
+def test_summarise_file_reads_the_declared_headerless_sample() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "sample.csv"
+        path.write_text(
+            "North,120.50\nSouth,80.25\nNorth,99.50\nEast,45.00\n",
+            encoding="utf-8",
+        )
+        counts, totals, skipped = summary.summarise_file(str(path))
+    assert counts == {"North": 2, "South": 1, "East": 1}
+    assert totals == {
+        "North": Decimal("220.00"),
+        "South": Decimal("80.25"),
+        "East": Decimal("45.00"),
+    }
+    assert skipped == 0
+
+
+def test_summarise_file_returns_an_empty_report_for_a_header_only_file() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "header_only.csv"
+        path.write_text("region,amount\n\n", encoding="utf-8")
+        counts, totals, skipped = summary.summarise_file(str(path))
+    assert counts == {}
+    assert totals == {}
+    assert skipped == 0
+
+
 TESTS = [
     test_looks_like_header_recognises_the_declared_names,
     test_looks_like_header_rejects_a_data_row,
@@ -224,10 +276,14 @@ TESTS = [
     test_format_amount_rounds_half_up,
     test_format_amount_rounds_negative_halves_away_from_zero,
     test_format_amount_never_prints_negative_zero,
+    test_format_amount_has_no_thousands_separator,
     test_format_report_renders_sorted_region_lines_then_total_then_skipped,
     test_format_report_is_empty_apart_from_total_and_skipped,
     test_format_report_always_prints_the_skipped_count_last,
     test_format_report_has_no_overall_mean_on_the_total_line,
+    test_format_report_rounds_a_negative_half_mean_away_from_zero,
+    test_summarise_file_reads_the_declared_headerless_sample,
+    test_summarise_file_returns_an_empty_report_for_a_header_only_file,
 ]
 
 
