@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Per-region revenue and average order value from a ``region,amount`` CSV.
+"""Per-suite pass percentage from a ``suite,passed,total`` CSV.
 
 Usage: bash summary.sh <csv>
 
 The report is::
 
-    <region> <count> <sum> <mean>     one line per region, sorted by name
-    TOTAL <count> <sum>               exactly once, after the region lines
-    SKIPPED <skipped-count>           always last, even when the count is 0
+    <suite> <passed> <total> <percentage>   one line per distinct suite
+    TOTAL <passed_sum> <total_sum>          exactly once, after the suite lines
 
-Columns are located by header name when the first non-blank record is a
-header (it names ``region`` and/or ``amount``).  The requirement's declared
-sample ships *without* a header, so a first record that names neither column
-is treated as the first data row with the columns in ``region,amount`` order.
-Any extra columns, and any column order, are irrelevant once the header is
-recognised.
+Suite lines follow the order in which each suite first appears in the input.
+The percentage is ``passed / total * 100`` printed with exactly one decimal
+place, rounded half away from zero (AMB-001).  Repeated suite names are merged
+into one line (AMB-002), a suite whose total is zero prints ``0.0`` (AMB-003),
+and a malformed record stops the run with a diagnostic naming its line
+(AMB-004).
+
+The input's first record is normally the header ``suite,passed,total``; it is
+consumed and never printed.  The declared sample in the requirement document
+carries no header line, so a first record that is not that header is treated
+as data with the columns in the declared order.  Surrounding whitespace on a
+field is ignored.
 
 Only the Python 3 standard library is used: no install step, no network
-access, and the input file is opened read-only.  Every sum and mean is
-printed with exactly two decimal places, with no thousands separator.
+access, and the input file is opened read-only.  The whole report is built
+before anything is written to stdout, so a fatal input error never leaves
+partial report lines behind.
 
 The ambiguities settled for this delivery are marked with greppable
 ``AMB-nnn`` comments below and recorded in ``docs/decisions.md``.
@@ -27,207 +33,202 @@ The ambiguities settled for this delivery are marked with greppable
 from __future__ import annotations
 
 import csv
-import itertools
+import re
 import sys
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-REQUIRED_COLUMNS = ("region", "amount")
-DEFAULT_COLUMNS = ("region", "amount")
-CENT = Decimal("0.01")
-# Wide enough that adding and dividing ordinary monetary amounts is exact
-# before the final two-decimal rounding.
-WORKING_PRECISION = 60
+HEADER_NAMES = ("suite", "passed", "total")
+USAGE = "usage: bash summary.sh <csv>"
+DEFAULT_ORDER = (0, 1, 2)
+
+# A count is a non-negative integer: plain digits with an optional leading "+".
+# Signs, decimals ("48.0"), blanks-only cells and text are not integers.
+COUNT = re.compile(r"^\+?[0-9]+$")
 
 
 class InputError(Exception):
-    """The input cannot be read as a ``region,amount`` sales CSV."""
+    """A problem with the input that must stop the run with a diagnostic."""
 
 
-def _header_name(cell: str) -> str:
-    """Normalise a header cell: drop a BOM, surrounding blanks and case."""
-    return cell.strip().lstrip("\ufeff").lower()
+def parse_count(text: str) -> Optional[int]:
+    """Return the non-negative integer in a cell, or ``None`` when it is not one."""
+    text = text.strip()
+    if not COUNT.match(text):
+        return None
+    return int(text)
 
 
-def looks_like_header(record: Sequence[str]) -> bool:
-    """True when the record names at least one of the required columns.
+def header_order(row: Sequence[str]) -> Optional[Tuple[int, int, int]]:
+    """Return the column positions named by a header row, or ``None``.
 
-    A data row has a region and a numeric amount, so it cannot name a
-    ``region``/``amount`` column.  Recognising *one* name is enough to call
-    the record a header: a header that names only ``region`` is still a
-    malformed header and must stop the run rather than be counted as data.
+    The declared header is exactly ``suite,passed,total``.  Names are matched
+    case-insensitively after trimming blanks, and a header that names the same
+    three columns in another order is accepted so the column order is not
+    silently guessed.
     """
-    return any(_header_name(cell) in REQUIRED_COLUMNS for cell in record)
+    names = [cell.strip().casefold().lstrip("\ufeff") for cell in row]
+    if len(names) != len(HEADER_NAMES) or set(names) != set(HEADER_NAMES):
+        return None
+    return tuple(names.index(name) for name in HEADER_NAMES)  # type: ignore[return-value]
 
 
-def resolve_columns(header: Sequence[str]) -> Tuple[int, int]:
-    """Return the (region, amount) indices named by a header record."""
-    positions: Dict[str, int] = {}
-    for index, cell in enumerate(header):
-        positions.setdefault(_header_name(cell), index)
-    missing = [name for name in REQUIRED_COLUMNS if name not in positions]
-    # REQ-002: columns are found by header name, never by position.  A header
-    # that does not name both columns is unusable, so the run stops with a
-    # diagnostic and prints no partial report.
-    if missing:
+def record_from_row(row: Sequence[str]) -> str:
+    """Render a CSV record for an error message without hiding its shape."""
+    return ",".join(row)
+
+
+def parse_row(
+    row: Sequence[str], columns: Sequence[int], line_no: int
+) -> Tuple[str, int, int]:
+    """Return ``(suite, passed, total)`` or raise ``InputError`` naming the line.
+
+    AMB-004 (stop-error): a row with the wrong number of fields, a non-integer
+    or negative count, or ``passed`` greater than ``total`` is fatal.  The
+    diagnostic names the offending input line and the run stops; no report is
+    printed.
+    """
+    record = record_from_row(row)
+
+    # AMB-004 (stop-error): any unusable record stops the run and names its line.
+    if len(row) != len(HEADER_NAMES):
         raise InputError(
-            "header is missing required column(s): " + ", ".join(missing)
+            "line %d: malformed record %r: expected %d fields, found %d"
+            % (line_no, record, len(HEADER_NAMES), len(row))
         )
-    return positions["region"], positions["amount"]
 
+    suite = row[columns[0]].strip()
+    passed_text = row[columns[1]].strip()
+    total_text = row[columns[2]].strip()
 
-def is_blank_record(record: Sequence[str]) -> bool:
-    """True for a physically blank line (no cell carries any text)."""
-    # REQ-002: a blank line is neither a record nor a skipped row.
-    return not record or all(cell.strip() == "" for cell in record)
-
-
-def parse_amount(value: str) -> Optional[Decimal]:
-    """Return the row's amount as a Decimal, or None when it is unusable."""
-    text = value.strip()
-    if text == "":
-        return None
-    try:
-        amount = Decimal(text)
-    except InvalidOperation:
-        return None
-    # ``NaN``/``Infinity`` are accepted by Decimal but are not sales amounts.
-    if not amount.is_finite():
-        return None
-    # AMB-004 (include): a well-formed negative amount is a refund and is
-    # returned like any other amount, so it reduces the region's revenue.
-    return amount
-
-
-def summarise_records(
-    header: Sequence[str], records: Iterable[Sequence[str]]
-) -> Tuple[Dict[str, int], Dict[str, Decimal], int]:
-    """Aggregate accepted records per region and count malformed rows."""
-    region_index, amount_index = resolve_columns(header)
-    needed = max(region_index, amount_index)
-    counts: Dict[str, int] = {}
-    totals: Dict[str, Decimal] = {}
-    skipped = 0
-    for record in records:
-        if is_blank_record(record):
-            continue
-        # AMB-001 (skip-count): a row too short to carry the named columns is
-        # skipped, excluded from every aggregate and counted on SKIPPED.
-        if len(record) <= needed:
-            skipped += 1
-            continue
-        region = record[region_index].strip()
-        amount = parse_amount(record[amount_index])
-        # AMB-001 (skip-count): an empty region or a non-numeric amount makes
-        # the row unusable; it is skipped and counted, never aggregated.
-        if region == "" or amount is None:
-            skipped += 1
-            continue
-        # AMB-002 (merge): every row is its own order.  There is deliberately
-        # no de-duplication, so a repeated region+amount counts twice and its
-        # amount is added twice.
-        counts[region] = counts.get(region, 0) + 1
-        totals[region] = totals.get(region, Decimal(0)) + amount
-    return counts, totals, skipped
-
-
-def _mean(total: Decimal, count: int) -> Decimal:
-    """Divide at a wide precision; the caller rounds the printed value."""
-    with localcontext() as context:
-        context.prec = WORKING_PRECISION
-        return total / count
-
-
-def format_amount(value: Decimal) -> str:
-    """Render an amount with exactly two decimal places."""
-    # AMB-003 (half-up): round half away from zero to exactly two decimals.
-    with localcontext() as context:
-        context.prec = WORKING_PRECISION
-        rounded = value.quantize(CENT, rounding=ROUND_HALF_UP)
-    # Avoid printing "-0.00" when refunds cancel out a region's revenue.
-    if rounded == 0:
-        rounded = abs(rounded)
-    return format(rounded, "f")
-
-
-def format_report(
-    counts: Dict[str, int], totals: Dict[str, Decimal], skipped: int
-) -> List[str]:
-    """Render the region lines, then TOTAL, then SKIPPED."""
-    lines: List[str] = []
-    # REQ-003 / REQ-008: sort by the UTF-8 bytes of the region name, so the
-    # order is lexicographic, locale-independent and independent of row order.
-    for region in sorted(counts, key=lambda name: name.encode("utf-8")):
-        count = counts[region]
-        total = totals[region]
-        lines.append(
-            f"{region} {count} {format_amount(total)} "
-            f"{format_amount(_mean(total, count))}"
+    passed = parse_count(passed_text)
+    if passed is None:
+        raise InputError(
+            "line %d: malformed record %r: passed is not a non-negative integer: %r"
+            % (line_no, record, passed_text)
         )
-    total_count = sum(counts.values())
-    total_sum = sum(totals.values(), Decimal(0))
-    # REQ-004: exactly one TOTAL line carrying only the two numbers.
-    lines.append(f"TOTAL {total_count} {format_amount(total_sum)}")
-    # REQ-005: the SKIPPED line is always printed, exactly once, last.
-    lines.append(f"SKIPPED {skipped}")
-    return lines
+
+    total = parse_count(total_text)
+    if total is None:
+        raise InputError(
+            "line %d: malformed record %r: total is not a non-negative integer: %r"
+            % (line_no, record, total_text)
+        )
+
+    if passed > total:
+        raise InputError(
+            "line %d: malformed record %r: passed (%d) is greater than total (%d)"
+            % (line_no, record, passed, total)
+        )
+
+    return suite, passed, total
 
 
-def _non_blank_records(reader: Iterable[Sequence[str]]) -> Iterator[Sequence[str]]:
-    for record in reader:
-        if is_blank_record(record):
-            continue
-        yield record
+def read_records(path: str) -> List[Tuple[int, List[str]]]:
+    """Read every non-blank CSV record as ``(starting line number, fields)``.
 
-
-def summarise_file(path: str) -> Tuple[Dict[str, int], Dict[str, Decimal], int]:
-    """Read ``path`` as a sales CSV and return its aggregates and skip count."""
+    Blank lines carry no record.  A parser-level failure (for example an
+    unclosed quote) is a malformed input and becomes an ``InputError``.
+    """
+    records: List[Tuple[int, List[str]]] = []
     try:
-        with open(path, "r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle)
-            stream = _non_blank_records(reader)
-            try:
-                first = next(stream)
-            except StopIteration:
-                # REQ-001 / REQ-009: a readable file with no records at all is
-                # a valid empty report, not an error.
-                return {}, {}, 0
-            if looks_like_header(first):
-                header = first
-                records: Iterable[Sequence[str]] = stream
-            else:
-                # The declared sample has no header row: use the declared
-                # column order and keep the first record as data (REQ-002).
-                header = DEFAULT_COLUMNS
-                records = itertools.chain([first], stream)
-            return summarise_records(header, records)
+        handle = open(path, "r", encoding="utf-8-sig", newline="")
     except OSError as exc:
-        raise InputError(f"cannot read {path}: {exc}") from exc
-    except UnicodeDecodeError as exc:
-        raise InputError(f"cannot decode {path} as UTF-8: {exc}") from exc
-    except csv.Error as exc:
-        raise InputError(f"cannot parse {path} as CSV: {exc}") from exc
+        raise InputError("cannot read %s: %s" % (path, exc.strerror or exc)) from exc
+
+    with handle:
+        reader = csv.reader(handle)
+        previous_line = 0
+        try:
+            for row in reader:
+                start_line = previous_line + 1
+                previous_line = reader.line_num
+                if not row or (len(row) == 1 and not row[0].strip()):
+                    continue
+                records.append((start_line, row))
+        except (csv.Error, UnicodeDecodeError) as exc:
+            raise InputError(
+                "line %d: malformed CSV record: %s" % (previous_line + 1, exc)
+            ) from exc
+    return records
+
+
+def format_percentage(passed: int, total: int) -> str:
+    """Render ``passed / total * 100`` with exactly one decimal place.
+
+    The value is scaled by 10 so the division stays exact integer arithmetic.
+    AMB-001 (half-up): an exact half rounds away from zero, so 2/3 prints
+    ``66.7`` (not ``66.6``) and 1/16 prints ``6.3``.  Both counts are
+    non-negative, so "away from zero" is plain half-up here.
+    """
+    # AMB-003 (zero-rate): a suite whose total is zero prints a line with 0.0.
+    if total == 0:
+        return "0.0"
+
+    scaled, remainder = divmod(passed * 1000, total)
+    # AMB-001 (half-up): `>=` sends an exact half up; `>` would be truncation.
+    if remainder * 2 >= total:
+        scaled += 1
+    return "%d.%d" % (scaled // 10, scaled % 10)
+
+
+def build_report(records: Iterable[Tuple[int, List[str]]]) -> str:
+    """Build the complete report text (suite lines then one TOTAL line)."""
+    order: List[str] = []
+    totals: Dict[str, List[int]] = {}
+    columns: Sequence[int] = DEFAULT_ORDER
+    first = True
+
+    for line_no, row in records:
+        if first:
+            first = False
+            found = header_order(row)
+            if found is not None:
+                columns = found
+                continue
+            # The declared sample has no header line: the first record is data
+            # in the declared column order.
+            columns = DEFAULT_ORDER
+
+        suite, passed, total = parse_row(row, columns, line_no)
+
+        # AMB-002 (merge): every row for a name is added to that suite, and the
+        # suite keeps the position where it first appeared.
+        if suite in totals:
+            totals[suite][0] += passed
+            totals[suite][1] += total
+        else:
+            order.append(suite)
+            totals[suite] = [passed, total]
+
+    lines: List[str] = []
+    passed_sum = 0
+    total_sum = 0
+    for suite in order:
+        passed, total = totals[suite]
+        passed_sum += passed
+        total_sum += total
+        lines.append(
+            "%s %d %d %s" % (suite, passed, total, format_percentage(passed, total))
+        )
+    lines.append("TOTAL %d %d" % (passed_sum, total_sum))
+    return "\n".join(lines) + "\n"
 
 
 def main(argv: Sequence[str]) -> int:
     if len(argv) != 2:
-        sys.stderr.write("usage: bash summary.sh <csv>\n")
+        print(USAGE, file=sys.stderr)
         return 2
+
+    path = argv[1]
     try:
-        counts, totals, skipped = summarise_file(argv[1])
+        report = build_report(read_records(path))
     except InputError as exc:
-        # REQ-001: a diagnostic on stderr, nothing on stdout, nonzero exit.
-        sys.stderr.write(f"summary: {exc}\n")
+        print("summary.sh: %s" % exc, file=sys.stderr)
         return 1
-    report = "".join(line + "\n" for line in format_report(counts, totals, skipped))
-    try:
-        # Write UTF-8 bytes directly so the output does not depend on locale.
-        sys.stdout.buffer.write(report.encode("utf-8"))
-        sys.stdout.buffer.flush()
-    except BrokenPipeError:
-        return 0
+
+    sys.stdout.write(report)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    raise SystemExit(main(sys.argv))

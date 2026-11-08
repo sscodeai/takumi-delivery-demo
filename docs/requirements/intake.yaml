@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-11-08T17:14:24.354Z"
+  at: "2026-11-08T18:57:04.389Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,220 +10,169 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "What does the tool do with a data row it cannot use as a sales record (a non-numeric amount, or a missing region/amount field)?"
-      chosen: "skip-count: skip the row, exclude it from every aggregate and count it on the SKIPPED line"
-      class: malformed-row-accounting
-      policy: document-default
-      checkedAs: skip-count
-    - id: AMB-002
-      question: "When the same region and the same amount appear on two data rows, how is that repetition resolved?"
-      chosen: "merge: each row is its own order, so both rows count and both amounts are added"
-      class: duplicate-resolution
-      policy: document-default
-      checkedAs: merge
-    - id: AMB-003
-      question: "How is a per-region average order value rounded when it has more than two decimal places?"
-      chosen: "half-up: round half away from zero to exactly two decimal places"
-      class: independent-aggregation
+      question: "How must the pass percentage be rounded when passed/total*100 has more than one decimal place?"
+      chosen: "half-up: round half away from zero to one decimal place"
+      class: derived-ratio
       policy: document-default
       checkedAs: half-up
+    - id: AMB-002
+      question: "When the same suite name appears on more than one data row, how is that suite reported?"
+      chosen: "merge: sum passed and total across all rows for the suite and print one line"
+      class: unmechanised
+      policy: document-default
+    - id: AMB-003
+      question: "What should the tool do when a suite's total is 0?"
+      chosen: "zero-rate: print a suite line with 0.0 as the percentage"
+      class: unmechanised
+      policy: document-default
     - id: AMB-004
-      question: "How is a well-formed negative amount (a refund) treated?"
-      chosen: "include: count it as a normal record so it reduces the region's revenue total"
+      question: "How should a data row that cannot be parsed (wrong number of fields, non-integer passed or total, negative values, or passed greater than total) be handled?"
+      chosen: "stop-error: stop with a non-zero exit and a message naming the offending line"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
-    title: "Provide summary.sh as the single entry point"
-    description: "The repository root contains a bash script summary.sh that is invoked as `bash summary.sh <csv>`, taking the input CSV path as its first argument ($1). It writes the whole report to stdout and exits 0 on success. No network access and no interactive input are required."
+    title: "Provide summary.sh as the command-line entry point"
+    description: >-
+      The repository root must contain a script named `summary.sh` that is
+      invoked as `bash summary.sh <csv>`: its first positional argument is the
+      path to the CSV file. It reads that file and writes the report to
+      standard output. A successful run exits 0; a missing argument, missing
+      file or unreadable file exits non-zero and writes a diagnostic to
+      standard error. It must not require a server, network access or
+      interactive input.
     acceptance_criteria:
-      - "`bash summary.sh <csv>` exits 0 and prints the report on stdout for a readable input file."
-      - "Invoking it with no argument, or with a path that cannot be read, exits non-zero, prints a diagnostic on stderr and prints no partial report on stdout."
+      - "`bash summary.sh <path-to-valid.csv>` exits 0 and writes the report to standard output."
+      - "`bash summary.sh` with no argument exits non-zero and writes a diagnostic to standard error."
+      - "`bash summary.sh /nonexistent/file.csv` exits non-zero and writes a diagnostic to standard error."
     priority: High
-    source: "The request asks for a command-line tool; deliverable.run fixes the invocation as `bash summary.sh {csv}`."
+    source: "The request asks for 'a command-line tool that reads a CSV'."
 
   - id: REQ-002
-    title: "Read the region and amount columns by header name"
-    description: "The first line of the file is a header naming the columns. The tool locates the `region` and `amount` columns by header name and ignores any additional columns and their order. Every later non-blank line is one sales record: a region key plus a numeric amount."
+    title: "Consume the declared CSV header and records"
+    description: >-
+      The input is comma-separated text whose first line is the header
+      `suite,passed,total`. Each subsequent non-empty line is one record:
+      `suite` is the suite name, `passed` is the number of passing tests and
+      `total` is the number of tests. The header is consumed and never printed
+      as a suite. A file with only the header is valid and produces no suite
+      lines. Fields are separated by commas; surrounding whitespace on each
+      field is ignored.
     acceptance_criteria:
-      - "A file whose header is `amount,region` produces the same report as one whose header is `region,amount`."
-      - "Extra columns in the header (for example `region,channel,amount`) do not change the reported numbers."
-      - "Blank lines between records are neither counted as records nor reported as skipped rows."
+      - "A file containing only the header produces no suite lines."
+      - "The header text is never emitted as a suite line."
+      - "A file with the header and three valid records produces exactly three suite lines."
     priority: High
-    source: "The request states the CSV has a header row with columns region and amount."
+    source: "The request states the CSV has a header row with columns suite, passed, total."
 
   - id: REQ-003
-    title: "Print one line per region with count, revenue total and average order value"
-    description: "For every region present in the accepted records the tool prints exactly one line of the form `<region> <count> <sum> <mean>`: count is the number of accepted records for that region, sum is that region's total revenue (sum of amount), and mean is that region's average order value (sum divided by count). Region lines are printed in ascending lexicographic order of the region name, one per region, with no repeats."
+    title: "Compute each suite's pass percentage"
+    description: >-
+      For each suite, the pass percentage is `passed / total * 100`. The value
+      is printed with exactly one digit after the decimal point. Rounding
+      follows AMB-001; under the proposed default it is round-half-up (away
+      from zero) rather than truncation.
     acceptance_criteria:
-      - "For the declared sample the line `North 2 220.00 110.00` is printed."
-      - "Each printed region appears on exactly one line, and the region lines are sorted by region name."
-      - "The number of region lines equals the number of distinct regions among the accepted records."
+      - "Under the proposed half-up default, a suite with passed=45 and total=50 prints `90.0`."
+      - "Under the proposed half-up default, a suite with passed=2 and total=3 prints `66.7` (not `66.6`)."
+      - "Every printed percentage contains exactly one digit after the decimal point."
     priority: High
-    source: "The request asks for total revenue and average order value per region."
+    source: "The request says 'prints one line per suite with the pass percentage rounded to one decimal place'."
 
   - id: REQ-004
-    title: "Print exactly one TOTAL line for the whole file"
-    description: "After the region lines the tool prints exactly one line `TOTAL <count> <sum>`, where count is the number of accepted records across all regions and sum is the total revenue across all regions. The totals line carries only these two numbers; no overall average is printed, because the request asks for the average order value per region only."
+    title: "Print the suite lines and one totals line in the declared shape"
+    description: >-
+      The report contains exactly one line per distinct suite, in the order in
+      which each suite first appears in the input, followed by exactly one
+      totals line. A suite line is `<suite> <passed> <total> <percentage>` with
+      single ASCII spaces, no percent sign and no header. The totals line is
+      `TOTAL <passed_sum> <total_sum>`, where `<passed_sum>` is the sum of the
+      `passed` values on the printed suite lines and `<total_sum>` is the sum
+      of the `total` values on those lines. A header-only input prints only
+      `TOTAL 0 0`.
     acceptance_criteria:
-      - "For the declared sample the line `TOTAL 4 345.25` is printed."
-      - "The TOTAL line is printed exactly once, after all region lines."
-      - "The count and sum on the TOTAL line equal the sum of the printed per-region counts and sums."
+      - "A fixture with the three sample rows prints three suite lines in first-appearance order followed by one `TOTAL` line."
+      - "The final line matches `TOTAL <integer> <integer>`."
+      - "The first number on the `TOTAL` line equals the sum of the numerator values on the suite lines, and the second equals the sum of the denominator values."
+      - "No line contains a percent sign or a header label."
     priority: High
-    source: "The request asks for the total revenue, and deliverable require exactly one totals line."
+    source: "The request requires one line per suite; the totals line makes the report checkable as a whole."
 
   - id: REQ-005
-    title: "Report skipped rows on a SKIPPED line"
-    description: "After the TOTAL line the tool always prints exactly one line `SKIPPED <skipped-count>` holding the number of data rows rejected as malformed. The line is printed even when the count is 0. The treatment of a malformed row itself is fixed by AMB-001."
+    title: "Record the non-mechanised edge-case policies"
+    description: >-
+      The request does not settle repeated suite names, zero totals or
+      malformed rows. They are recorded as AMB-002, AMB-003 and AMB-004. No
+      declared judge relation checks these three policies; the implementation
+      and its documentation must follow the answered option, or the proposed
+      default while the question is unanswered. These policies are not claimed
+      as mechanised acceptance criteria.
     acceptance_criteria:
-      - "For a file with no malformed rows the final line is `SKIPPED 0`."
-      - "For a file with two malformed rows the final line is `SKIPPED 2` and no rejected row contributes to any region or to the totals."
-      - "The SKIPPED line is always printed, exactly once, as the last line of the report."
-    priority: High
-    source: "A malformed-row decision is required; the SKIPPED line is how the skip-count answer becomes checkable."
-
-  - id: REQ-006
-    title: "Format all printed numbers with two decimal places"
-    description: "Every sum and mean the tool prints has exactly two decimal places, with no thousands separators and no currency symbol. The rounding of the mean follows AMB-003; sums are printed with the same two-decimal formatting."
-    acceptance_criteria:
-      - "A mean of 110 is printed as `110.00`, not `110` or `110.0`."
-      - "A mean of 86.3125 is printed as `86.31` under the half-up answer to AMB-003."
-      - "Counts and the skipped count are printed as plain integers."
-    priority: High
-    source: "The request does not say how the numbers are presented; the format must be stated for a judge to parse it."
-
-  - id: REQ-007
-    title: "Treat a repeated identical record according to AMB-002"
-    description: "A data row that repeats the same region and the same amount as an earlier row is resolved exactly as AMB-002 decides. The decision applies to the aggregates and to the counts printed per region, on TOTAL, and on the SKIPPED line."
-    acceptance_criteria:
-      - "A file in which `North,120.50` appears twice yields the aggregates implied by the AMB-002 answer, not an arbitrary mixture."
-      - "The per-region count, the TOTAL count and the per-region sum all reflect the same duplicate resolution."
-    priority: High
-    source: "The request says nothing about repeated records, and repeated keys are normal in a sales CSV."
-
-  - id: REQ-008
-    title: "Produce the same report for any ordering of the input rows"
-    description: "The report depends only on the set of accepted records, not on their order in the file: shuffling the data rows (keeping the header first) yields byte-identical stdout."
-    acceptance_criteria:
-      - "Running the tool on the declared sample and on a shuffled copy of the same rows produces identical stdout."
-      - "Region lines remain sorted by region name regardless of input order."
+      - "AMB-002, AMB-003 and AMB-004 each have exactly one documented policy in the delivered project's README or help text."
+      - "No relation in this document claims to check the duplicate-suite, zero-total or malformed-row policy."
     priority: Medium
-    source: "The request does not constrain row order; the result must not silently depend on it."
-
-  - id: REQ-009
-    title: "Handle a file with no data rows"
-    description: "A file containing only the header (or only the header and blank lines) is a valid empty report: no region lines are printed, followed by `TOTAL 0 0.00` and `SKIPPED 0`. This is not an error and the exit code is 0."
-    acceptance_criteria:
-      - "A header-only file produces exactly `TOTAL 0 0.00` followed by `SKIPPED 0` and exits 0."
-      - "No region line is printed when there are no accepted records."
-    priority: Medium
-    source: "The request leaves the empty-input case open; it is settled here in prose rather than as a decision."
-
-  - id: REQ-010
-    title: "Support negative amounts as refunds according to AMB-004"
-    description: "A well-formed amount below zero is handled as AMB-004 decides. No judge-generated relation mechanises this decision yet; it is recorded so the behaviour is stated rather than left to chance."
-    acceptance_criteria:
-      - "A row with amount `-25.00` is either included in the region's sum and count or rejected and counted on SKIPPED, consistently with the AMB-004 answer."
-      - "A negative amount is never treated as a malformed (non-numeric) amount."
-    priority: Low
-    source: "Sales records can contain refunds; the request does not say whether they count."
-
-  - id: REQ-011
-    title: "Ship a test suite that checks the delivered behaviour"
-    description: "The repository root contains run-tests.sh, invoked as `bash run-tests.sh`, which runs the delivered tests for the tool and writes a TAP report to reports/tests.tap. The tests must assert the per-region totals, the per-region averages, the TOTAL line, the SKIPPED line and the rounding behaviour, so that a mutated aggregate would fail them."
-    acceptance_criteria:
-      - "`bash run-tests.sh` exits 0 and writes a readable TAP report to reports/tests.tap."
-      - "The report contains at least one test asserting a per-region revenue total and one asserting a per-region average order value."
-      - "A deliberately wrong aggregate (for example a mean replaced by a sum) makes at least one delivered test fail."
-    priority: Medium
-    source: "The delivered tests are the only mechanical check of the report beyond the declared relations."
+    source: "The request is silent on duplicates, zero denominators and malformed rows."
 
 ambiguities:
   - id: AMB-001
-    question: "What does the tool do with a data row it cannot use as a sales record (a non-numeric amount, or a missing region/amount field)?"
+    question: "How must the pass percentage be rounded when passed/total*100 has more than one decimal place?"
     options:
-      - "skip-count: skip the row, exclude it from every aggregate and count it on the SKIPPED line"
-      - "skip-silent: skip the row silently and print nothing about it"
-      - "stop-error: abort the whole run with a non-zero exit code"
-    default: "skip-count: skip the row, exclude it from every aggregate and count it on the SKIPPED line"
-    checkedAs: skip-count
-    blocking: true
-
-    chosen: "skip-count: skip the row, exclude it from every aggregate and count it on the SKIPPED line"
-  - id: AMB-002
-    question: "When the same region and the same amount appear on two data rows, how is that repetition resolved?"
-    options:
-      - "merge: each row is its own order, so both rows count and both amounts are added"
-      - "last-row: only the last occurrence is kept and earlier identical rows are dropped"
-      - "error: an identical repeat aborts the run with a non-zero exit code"
-    default: "merge: each row is its own order, so both rows count and both amounts are added"
-    checkedAs: merge
-    blocking: true
-
-    chosen: "merge: each row is its own order, so both rows count and both amounts are added"
-  - id: AMB-003
-    question: "How is a per-region average order value rounded when it has more than two decimal places?"
-    options:
-      - "half-up: round half away from zero to exactly two decimal places"
-      - "truncate: drop digits after the second decimal place"
-    default: "half-up: round half away from zero to exactly two decimal places"
+      - "half-up: round half away from zero to one decimal place"
+      - "truncate: drop all digits after the first decimal place"
+    default: "half-up: round half away from zero to one decimal place"
     checkedAs: half-up
     blocking: true
 
-    chosen: "half-up: round half away from zero to exactly two decimal places"
-  - id: AMB-004
-    question: "How is a well-formed negative amount (a refund) treated?"
+    chosen: "half-up: round half away from zero to one decimal place"
+  - id: AMB-002
+    question: "When the same suite name appears on more than one data row, how is that suite reported?"
     options:
-      - "include: count it as a normal record so it reduces the region's revenue total"
-      - "exclude: reject it as unusable and count it on the SKIPPED line"
-    default: "include: count it as a normal record so it reduces the region's revenue total"
+      - "merge: sum passed and total across all rows for the suite and print one line"
+      - "last-row: keep only the values from the last row for the suite"
+      - "error: stop with a non-zero exit and name the repeated suite"
+    default: "merge: sum passed and total across all rows for the suite and print one line"
     blocking: false
 
-    chosen: "include: count it as a normal record so it reduces the region's revenue total"
+    chosen: "merge: sum passed and total across all rows for the suite and print one line"
+  - id: AMB-003
+    question: "What should the tool do when a suite's total is 0?"
+    options:
+      - "zero-rate: print a suite line with 0.0 as the percentage"
+      - "skip-silent: omit the suite from the report and continue"
+      - "error: stop with a non-zero exit and name the suite"
+    default: "zero-rate: print a suite line with 0.0 as the percentage"
+    blocking: false
+
+    chosen: "zero-rate: print a suite line with 0.0 as the percentage"
+  - id: AMB-004
+    question: "How should a data row that cannot be parsed (wrong number of fields, non-integer passed or total, negative values, or passed greater than total) be handled?"
+    options:
+      - "stop-error: stop with a non-zero exit and a message naming the offending line"
+      - "skip-silent: ignore the row and continue with the remaining rows"
+    default: "stop-error: stop with a non-zero exit and a message naming the offending line"
+    blocking: false
+
+    chosen: "stop-error: stop with a non-zero exit and a message naming the offending line"
 deliverable:
   run: "bash summary.sh {csv}"
   timeoutMs: 10000
   input_format:
-    columns: "region:id,amount:measure"
+    columns: "suite:id,passed:measure,total:other"
     sample: |
-      North,120.50
-      South,80.25
-      North,99.50
-      East,45.00
+      login,45,50
+      search,19,20
+      billing,7,8
   output_format:
-    region_line:
-      shape: "<region> <count> <sum> <mean>"
-      fields: [id, count, sum, mean]
+    suite_line:
+      shape: "<suite> <passed> <total> <percentage>"
+      fields: [id, numerator, denominator, ratio]
     total_line:
-      shape: "TOTAL <count> <sum>"
-      fields: [count, sum]
-    skipped_line:
-      shape: "SKIPPED <skipped-count>"
-      fields: [skipped-count]
-  scenarios:
-    - id: SCN-001
-      run: "bash run-tests.sh"
-      expect: "the delivered tests pass and assert the per-region revenue totals, the per-region average order values, the TOTAL line, the SKIPPED line and two-decimal rounding"
-      report: tap
-      report_path: "reports/tests.tap"
+      shape: "TOTAL <passed_sum> <total_sum>"
+      fields: [sum, sum]
   relations:
     - id: REL-001
-      relation: malformed-row-accounting
+      relation: derived-ratio
       decides: AMB-001
-      description: "An unusable data row is skipped and counted on the SKIPPED line, as AMB-001 decided."
-    - id: REL-002
-      relation: duplicate-resolution
-      decides: AMB-002
-      description: "A repeated region+amount row resolves as AMB-002 decided, consistently in the per-region lines and the totals."
-    - id: REL-003
-      relation: additivity
-      description: "The per-region counts sum to the count on the TOTAL line, and the per-region sums sum to the sum on the TOTAL line."
-    - id: REL-004
-      relation: row-order-invariance
-      description: "Shuffling the data rows produces byte-identical stdout."
+      description: "Each printed percentage equals its printed numerator divided by its printed denominator, multiplied by 100 and rounded to one decimal place the way AMB-001 decided."
   differential:
-    - id: DIFF-001
-      anchor: independent-aggregation
-      decides: AMB-003
-      description: "An independent recomputation of each region's count, sum and mean from the records matches the tool's output, with means rounded the way AMB-003 decided."
