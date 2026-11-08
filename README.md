@@ -74,11 +74,15 @@ bash run-tests.sh
 fixtures in `tests/fixtures/` and asserts exact stdout and stderr for mixed
 counts, single-status assignees, reordered and extra columns, RFC 4180 quoting,
 shuffled rows, byte order, locale independence, header-only and all-skipped
-files, and each AMB-001..AMB-004 rule. `tests/test_summary_units.py` imports
-`summary.py` and checks the helpers directly. `tests/test_contract.py` reads
-the resulting TAP reports and checks the mutation harness and decision record.
-All three write TAP reports (`reports/tests.tap`, `reports/tests-units.tap`,
-`reports/tests-contract.tap`) and the runner exits nonzero if any check fails.
+files, skipped-row accounting, and each AMB-001..AMB-004 rule.
+`tests/test_summary_units.py` imports `summary.py` and checks the helpers
+directly. `tests/test_contract.py` reads the resulting TAP reports, checks the
+mutation harness and decision record, and proves that a deliberately broken
+expectation and a surviving mutant both make the run fail.
+Three TAP reports are written: `reports/tests.tap` is the acceptance/AMB
+report, `reports/tests-units.tap` is the unit report, and
+`reports/tests-contract.tap` is the delivery contract report. Each suite writes
+only its own report, and the runner exits nonzero if any check fails.
 `docs/test-plan.md` maps each acceptance criterion and ambiguity to its checks.
 
 ```

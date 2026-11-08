@@ -401,7 +401,13 @@ def main() -> int:
     print(f"mutants: {len(MUTANTS)}")
     print(f"survivors: {len(survivors)}")
     print(f"elapsed: {time.monotonic() - started:.1f}s")
-    print(f"report: {REPORT.relative_to(ROOT)}")
+    try:
+        shown_report = REPORT.relative_to(ROOT)
+    except ValueError:
+        # A caller may point the report outside the project (the contract
+        # suite does so to avoid touching the delivered report).
+        shown_report = REPORT
+    print(f"report: {shown_report}")
     print(json.dumps(report, indent=2))
     return 0 if not survivors else 1
 

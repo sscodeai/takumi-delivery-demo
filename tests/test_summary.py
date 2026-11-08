@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,9 @@ def run_tool(
         text=True,
         encoding="utf-8",
         env=environment,
+        # REQ-001: the tool must never wait for interactive input or hang.
+        stdin=subprocess.DEVNULL,
+        timeout=30,
     )
 
 
@@ -80,6 +84,21 @@ def lines_of(report: str) -> List[str]:
     return report.splitlines()
 
 
+def skipped_count(stderr: str) -> int:
+    match = re.search(r"skipped (\d+) malformed", stderr)
+    assert match is not None, f"no skipped-row count on stderr: {stderr!r}"
+    return int(match.group(1))
+
+
+def totals_of(report: str) -> tuple[int, int]:
+    opened = closed = 0
+    for line in lines_of(report):
+        _, open_text, closed_text = line.rsplit(" ", 2)
+        opened += int(open_text)
+        closed += int(closed_text)
+    return opened, closed
+
+
 # --- REQ-001: entry point --------------------------------------------------
 
 
@@ -92,6 +111,24 @@ def test_entry_point_and_delivered_files_exist() -> None:
 
 def test_documented_invocation_on_the_sample_file() -> None:
     result = run_tool("sample/tickets.csv", cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == SAMPLE
+    assert result.stderr == ""
+
+
+def test_runs_without_interactive_input_or_network() -> None:
+    # REQ-001: stdin is already /dev/null in run_tool; point every proxy at a
+    # closed port and confirm the report still comes out.
+    result = run_tool(
+        "sample/tickets.csv",
+        extra_env={
+            "http_proxy": "http://127.0.0.1:9",
+            "https_proxy": "http://127.0.0.1:9",
+            "HTTP_PROXY": "http://127.0.0.1:9",
+            "HTTPS_PROXY": "http://127.0.0.1:9",
+            "NO_PROXY": "",
+        },
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout == SAMPLE
     assert result.stderr == ""
@@ -275,9 +312,7 @@ def test_all_rows_skipped_prints_nothing_and_exits_zero() -> None:
     result = run_tool(str(FIXTURES / "all_skipped.csv"))
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    assert "4" in result.stderr, (
-        f"the four skipped rows should be counted on stderr: {result.stderr!r}"
-    )
+    assert skipped_count(result.stderr) == 4, result.stderr
 
 
 # --- AMB-001: status recognition ------------------------------------------
@@ -294,9 +329,17 @@ def test_unrecognised_status_is_skipped_and_counted_on_stderr() -> None:
     result = run_tool(str(FIXTURES / "unknown_status.csv"))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "ann 1 1\n"
-    assert "1" in result.stderr, (
-        f"the one unrecognised status should be counted on stderr: {result.stderr!r}"
-    )
+    assert skipped_count(result.stderr) == 1, result.stderr
+
+
+def test_assignee_seen_only_in_skipped_rows_gets_no_line() -> None:
+    # REQ-005 + AMB-001/AMB-003: an assignee whose only rows were skipped must
+    # not be invented with zero counts.
+    result = run_tool(str(FIXTURES / "unknown_only.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "ann 1 0\n"
+    assert "zed" not in result.stdout
+    assert skipped_count(result.stderr) == 2, result.stderr
 
 
 # --- AMB-002: one line per assignee ---------------------------------------
@@ -318,30 +361,29 @@ def test_skipped_rows_are_counted_on_stderr_and_do_not_change_counts() -> None:
     result = run_tool(str(FIXTURES / "skipped.csv"))
     assert result.returncode == 0, result.stderr
     assert result.stdout == SKIPPED
-    assert "5" in result.stderr, (
-        f"five malformed rows should be counted on stderr: {result.stderr!r}"
-    )
+    assert skipped_count(result.stderr) == 5, result.stderr
+    assert totals_of(result.stdout) == (2, 1), "only the three good rows count"
 
 
 def test_empty_assignee_rows_are_skipped_and_counted() -> None:
     result = run_tool(str(FIXTURES / "empty_assignee.csv"))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "ann 1 0\n"
-    assert "2" in result.stderr
+    assert skipped_count(result.stderr) == 2, result.stderr
 
 
 def test_empty_status_rows_are_skipped_and_counted() -> None:
     result = run_tool(str(FIXTURES / "empty_status.csv"))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "ann 1 0\n"
-    assert "2" in result.stderr
+    assert skipped_count(result.stderr) == 2, result.stderr
 
 
 def test_short_rows_are_skipped_and_counted() -> None:
     result = run_tool(str(FIXTURES / "short_row.csv"))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "ann 1 0\n"
-    assert "1" in result.stderr
+    assert skipped_count(result.stderr) == 1, result.stderr
 
 
 def test_header_without_required_columns_stops_the_run() -> None:
@@ -374,6 +416,7 @@ def test_assignee_is_trimmed_but_case_is_preserved() -> None:
 TESTS = [
     test_entry_point_and_delivered_files_exist,
     test_documented_invocation_on_the_sample_file,
+    test_runs_without_interactive_input_or_network,
     test_relative_path_works_from_the_repository_root,
     test_missing_argument_is_a_usage_error,
     test_nonexistent_input_is_an_error_with_empty_stdout,
@@ -395,6 +438,7 @@ TESTS = [
     test_all_rows_skipped_prints_nothing_and_exits_zero,
     test_status_is_trimmed_and_case_insensitive,
     test_unrecognised_status_is_skipped_and_counted_on_stderr,
+    test_assignee_seen_only_in_skipped_rows_gets_no_line,
     test_one_line_per_assignee_with_both_counts_and_nothing_else,
     test_skipped_rows_are_counted_on_stderr_and_do_not_change_counts,
     test_empty_assignee_rows_are_skipped_and_counted,

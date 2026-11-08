@@ -19,10 +19,13 @@ reports they read already exist.  This suite's own report is written to
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Sequence
 
@@ -101,6 +104,16 @@ def load_mutation_harness():
     return module
 
 
+def load_acceptance_suite():
+    path = ROOT / "tests" / "test_summary.py"
+    assert path.is_file(), "tests/test_summary.py is missing"
+    spec = importlib.util.spec_from_file_location("acceptance_summary", path)
+    assert spec and spec.loader, f"cannot load {path}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # --- REQ-006: the delivered test entry point -------------------------------
 
 
@@ -149,6 +162,35 @@ def test_unit_tap_report_is_readable_and_has_no_failures() -> None:
     assert result_names(lines), "unit report contains no checks"
 
 
+def test_a_broken_fixture_expectation_fails_with_a_tap_not_ok() -> None:
+    # REQ-006: deliberately break one expectation and prove the delivered
+    # runner exits nonzero and records a failing TAP line.
+    module = load_acceptance_suite()
+    original_mixed = module.MIXED
+    previous_tap_out = os.environ.get("TAP_OUT")
+    module.MIXED = "alice 999 1\nbob 0 3\ncarol 1 0\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        tap_path = Path(tmp) / "tests.tap"
+        os.environ["TAP_OUT"] = str(tap_path)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                returncode = run_tests(
+                    [module.test_mixed_per_assignee_open_and_closed_counts],
+                    str(tap_path),
+                )
+            report = tap_path.read_text(encoding="utf-8")
+        finally:
+            module.MIXED = original_mixed
+            if previous_tap_out is None:
+                os.environ.pop("TAP_OUT", None)
+            else:
+                os.environ["TAP_OUT"] = previous_tap_out
+    assert returncode != 0, "a broken expectation must make the runner fail"
+    assert "not ok 1 - test_mixed_per_assignee_open_and_closed_counts" in report, (
+        f"no failing TAP line for the broken expectation: {report!r}"
+    )
+
+
 # --- REQ-007: the mutation check -------------------------------------------
 
 
@@ -195,6 +237,54 @@ def test_mutation_report_has_the_documented_shape() -> None:
     assert report["survivors"] == [], (
         f"the delivered suite left mutants alive: {report['survivors']!r}"
     )
+
+
+def test_mutation_harness_fails_and_reports_a_surviving_mutant() -> None:
+    # REQ-007: the harness must exit nonzero and list the survivor when a
+    # mutant is not killed.  run_mutant is stubbed so this check does not
+    # recurse into the suite that is currently running.
+    module = load_mutation_harness()
+    original_mutants = module.MUTANTS
+    original_run_mutant = module.run_mutant
+    original_report = module.REPORT
+    survivor = {
+        "id": "deliberate-survivor",
+        "target": "summary.py",
+        "description": "a deliberately surviving mutant",
+        "edits": [("REQ-004", "REQ-004")],
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        report_path = Path(tmp) / "mutation.json"
+        module.MUTANTS = [survivor]
+        module.run_mutant = lambda mutant, sources: (1, 0)
+        module.REPORT = report_path
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    returncode = module.main()
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        finally:
+            module.MUTANTS = original_mutants
+            module.run_mutant = original_run_mutant
+            module.REPORT = original_report
+    assert returncode != 0, "a surviving mutant must make the harness fail"
+    assert payload["total"] == 1, payload
+    assert len(payload["survivors"]) == 1, payload
+    assert payload["survivors"][0]["description"] == survivor["description"]
+
+
+def test_tool_uses_no_network_client() -> None:
+    source = read_text("summary.py")
+    for client in (
+        "import socket",
+        "import urllib",
+        "import http",
+        "import requests",
+        "from socket",
+        "from urllib",
+        "from http",
+    ):
+        assert client not in source, f"summary.py imports a network client: {client}"
 
 
 # --- ADR-060: the decision record ------------------------------------------
@@ -262,9 +352,12 @@ TESTS = [
     test_acceptance_report_has_ok_lines_for_each_required_behaviour,
     test_default_acceptance_report_path_is_reports_tests_tap,
     test_unit_tap_report_is_readable_and_has_no_failures,
+    test_a_broken_fixture_expectation_fails_with_a_tap_not_ok,
     test_mutation_entry_point_and_mutants_exist,
     test_mutation_report_path_matches_the_requirement,
     test_mutation_report_has_the_documented_shape,
+    test_mutation_harness_fails_and_reports_a_surviving_mutant,
+    test_tool_uses_no_network_client,
     test_decisions_document_maps_every_ambiguity_to_source,
     test_every_ambiguity_has_a_greppable_source_comment,
     test_readme_documents_the_shipped_behaviour,
@@ -275,4 +368,10 @@ TESTS = [
 
 
 if __name__ == "__main__":
-    sys.exit(run_tests(TESTS, "reports/tests-contract.tap"))
+    sys.exit(
+        run_tests(
+            TESTS,
+            "reports/tests-contract.tap",
+            env_var="CONTRACT_TAP_OUT",
+        )
+    )

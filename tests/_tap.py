@@ -3,7 +3,8 @@
 Every suite below collects plain ``test_*`` functions, runs them, prints a TAP
 report and returns a nonzero exit status when any check fails.  ``$TAP_OUT``
 overrides the report path so the mutation harness can point a mutant's run at
-a throwaway directory.
+a throwaway directory; ``env_var`` lets a suite that must *read* the
+acceptance report write its own report through a different variable.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def run_tests(
-    tests: Sequence[Callable[[], None]], default_path: str
+    tests: Sequence[Callable[[], None]],
+    default_path: str,
+    env_var: str = "TAP_OUT",
 ) -> int:
     results: List[Tuple[str, bool, str]] = []
     for test in tests:
@@ -42,7 +45,7 @@ def run_tests(
     out.append(f"# fail {len(results) - passed_count}")
     text = "\n".join(out) + "\n"
 
-    tap_path = Path(os.environ.get("TAP_OUT", default_path))
+    tap_path = Path(os.environ.get(env_var, default_path))
     if not tap_path.is_absolute():
         tap_path = ROOT / tap_path
     tap_path.parent.mkdir(parents=True, exist_ok=True)

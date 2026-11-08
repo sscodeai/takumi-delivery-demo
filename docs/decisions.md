@@ -35,7 +35,7 @@ the record is complete:
 | REQ-002 | RFC 4180 quoting and LF/CRLF records | `summary.py:107`-`summary.py:109` (stdlib `csv.reader`, `newline=""`) |
 | REQ-003 | one status count per counted row, missing class prints 0 | `summary.py:99`-`summary.py:101`, `summary.py:131`-`summary.py:134` |
 | REQ-004 | byte-order sort, locale-independent output | `summary.py:128`-`summary.py:130`, UTF-8 bytes written at `summary.py:153`-`summary.py:156` |
-| REQ-005 | no line for an assignee never seen; empty report exits 0 | `summary.py:125`-`summary.py:135`, `summary.py:138`-`summary.py:159` |
+| REQ-005 | no line for an assignee never seen; empty report exits 0 | `summary.py:125`-`summary.py:135`, `summary.py:138`-`summary.py:159`; tests `test_header_only_file_prints_nothing_and_exits_zero`, `test_assignee_seen_only_in_skipped_rows_gets_no_line` |
 
 The delivered tests that pin these rows are in `tests/test_summary.py`
 (acceptance, exact stdout/stderr through `bash summary.sh`) and
