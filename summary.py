@@ -1,30 +1,25 @@
 #!/usr/bin/env python3
 """Implementation behind ``bash summary.sh <csv>``.
 
-The confirmed requirement document is ``docs/requirements/intake.yaml``. Its
-deliverable block declares::
+Contract: ``docs/requirements/intake.yaml``.
 
-    run:          bash summary.sh {csv}
-    region line:  <region> <count> <sum> <mean>
-    total line:   TOTAL <count> <sum>
-    skipped line: SKIPPED <skipped-count>
+The input is a CSV whose first line is a header naming the columns ``region``
+and ``amount``. Columns are mapped by header name, so their order in the file
+does not matter (REQ-002). Data rows are comma separated and must supply one
+value per header column; a row with any other field count is malformed.
 
-The input is a CSV of sales records whose first line is the header
-``region,amount`` (matched case-insensitively after trimming surrounding
-blanks). The requirement document's declared sample carries no header line, so
-a first line that is not that header is read as data instead of being dropped;
-a file that does carry the header never counts it as a data row (REQ-001).
+Output, in this order:
 
-Each distinct region is printed once, with every row of that region merged into
-its count, sum and mean (AMB-002). Rows that cannot be used are skipped,
-excluded from every aggregate and reported on the final ``SKIPPED`` line only
-when at least one was skipped (AMB-001, REQ-004). All arithmetic is exact
-(``fractions.Fraction``) and printed values are rounded half away from zero at
-the second decimal place (AMB-003, REQ-006); binary floating point is never
-used, so repeated runs print byte-identical output.
+    <region> <revenue> <average_order_value>     one line per region
+    SKIPPED <skipped>                            always, even when zero
+    TOTAL <revenue> <orders>                     always, exactly once
 
-The whole report is built before anything is written to stdout, so a fatal
-input error never leaves partial report lines behind.
+Revenue and average are printed with exactly two decimals, rounded half away
+from zero from exact arithmetic (AMB-003). The group key is the region cell
+trimmed of surrounding ASCII whitespace and compared case-sensitively
+(AMB-004). Every valid row counts as its own sales record, so duplicates are
+merged, never deduplicated (AMB-002). A row that cannot be read is skipped,
+excluded from every aggregate, and counted on the SKIPPED line (AMB-001).
 """
 
 import csv
@@ -33,17 +28,18 @@ import sys
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 
-# The two columns named by the header, in the only order the deliverable
-# assigns them: region is field 0, amount is field 1 (REQ-001, REQ-002).
-COLUMNS = ("region", "amount")
+REGION_COLUMN = "region"
+AMOUNT_COLUMN = "amount"
 
-# AMB-004 (plain-decimal): an amount is an optional leading sign, digits and an
-# optional fractional part -- nothing else. Currency symbols, thousands
-# separators, percent signs and surrounding blanks are NOT stripped, so a row
-# carrying them is unusable under AMB-001.
-AMOUNT = re.compile(r"^[+-]?[0-9]+(?:\.[0-9]+)?$")
+# Surrounding ASCII whitespace trimmed from a region cell (AMB-004).
+ASCII_WHITESPACE = " \t\r\n\f\v"
 
-# A record the csv parser itself rejected. It is one unusable row like any
+# A "plain decimal number": optional sign, then digits with an optional
+# fractional part (or a bare fraction such as ".5"). No thousands separators,
+# currency symbols, percent signs, exponents or surrounding blanks.
+AMOUNT_RE = re.compile(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$")
+
+# A record the csv parser itself rejected. It is a malformed data row like any
 # other: skipped, excluded from every aggregate and counted on SKIPPED.
 MALFORMED = object()
 
@@ -51,74 +47,13 @@ USAGE = "usage: bash summary.sh <csv>\n"
 
 
 class InputError(Exception):
-    """The input cannot be read at all: missing file, unreadable path, bad encoding."""
-
-
-def looks_like_header(record):
-    """Return True when the first record is the declared header row.
-
-    The declared header is ``region,amount``; REQ-001 says the same line is
-    still a header when its names differ in case or surrounding whitespace, so
-    each field is trimmed and lowercased before comparison. Anything else on
-    the first line is data (the declared sample has no header line).
-    """
-    if record is MALFORMED:
-        return False
-    if len(record) != len(COLUMNS):
-        return False
-    return tuple(field.strip().lower() for field in record) == COLUMNS
-
-
-def parse_amount(text):
-    """Return the exact numeric value of an amount cell, or None when unusable.
-
-    Only a plain decimal is accepted (AMB-004). The value is returned as an
-    exact ``Fraction`` so that summing never accumulates binary error.
-    """
-    if not AMOUNT.match(text):
-        return None
-    try:
-        return Fraction(Decimal(text))
-    except (InvalidOperation, ValueError):  # defensive: regex already guarantees shape
-        return None
-
-
-def parse_region(text):
-    """Return the region key of a cell, or None when the cell is unusable.
-
-    AMB-005 (exact): the region is used verbatim as the group key, so case and
-    internal spacing are significant. A region that is empty or whitespace-only
-    is unusable under AMB-001 / REQ-004.
-    """
-    if text.strip() == "":
-        return None
-    return text
-
-
-def parse_row(record):
-    """Return ``(region, amount)`` for a usable row, or None when it is unusable.
-
-    A row is unusable when it does not have exactly two fields, when the region
-    is empty or whitespace-only, or when the amount is not a plain decimal
-    (REQ-004, AMB-004).
-    """
-    if record is MALFORMED:
-        return None
-    if len(record) != len(COLUMNS):
-        return None
-    region = parse_region(record[0])
-    if region is None:
-        return None
-    amount = parse_amount(record[1])
-    if amount is None:
-        return None
-    return region, amount
+    """The file cannot be used as input at all (empty, or no valid header)."""
 
 
 def read_records(handle):
     """Yield every CSV record, turning a parser-level error into MALFORMED.
 
-    One pathological record must not abort the run: it becomes an unusable row,
+    One pathological record must not abort the run: it becomes a malformed row,
     so the caller skips it and counts it (AMB-001).
     """
     reader = csv.reader(handle, strict=True)
@@ -131,27 +66,71 @@ def read_records(handle):
             yield MALFORMED
 
 
-def format_cents(cents):
-    """Render an integer number of cents with exactly two decimal places.
+def header_columns(record):
+    """Return ``(width, region_index, amount_index)`` for the header row.
 
-    The caller has already rounded half away from zero at the second decimal
-    place (AMB-003). A zero value never carries a minus sign.
+    The header names are matched after trimming surrounding ASCII whitespace and
+    folding ASCII case, so ``Region,Amount`` is still the declared header. A
+    header that does not name both required columns is a fatal input error.
     """
-    sign = "-" if cents < 0 else ""
-    magnitude = abs(cents)
-    return "%s%d.%02d" % (sign, magnitude // 100, magnitude % 100)
+    if record is MALFORMED:
+        raise InputError("cannot parse the header row")
+    names = [field.strip(ASCII_WHITESPACE).lower() for field in record]
+    region_index = amount_index = None
+    for index, name in enumerate(names):
+        if name == REGION_COLUMN and region_index is None:
+            region_index = index
+        elif name == AMOUNT_COLUMN and amount_index is None:
+            amount_index = index
+    missing = [
+        name
+        for name, index in (
+            (REGION_COLUMN, region_index),
+            (AMOUNT_COLUMN, amount_index),
+        )
+        if index is None
+    ]
+    if missing:
+        raise InputError(
+            "header does not name required column(s): %s" % ", ".join(missing)
+        )
+    return len(record), region_index, amount_index
 
 
-def rounded_cents(value):
-    """Round an exact value half away from zero at the second decimal place.
+def parse_region(text):
+    """Return the trimmed region key, or None when the cell is blank.
 
-    AMB-003 (half-up): an exact half rounds away from zero. The comparison is
-    on the exact remainder, so a repeating decimal is never truncated to a
-    nearby binary approximation first.
+    AMB-004 (exact-trimmed): surrounding ASCII whitespace is removed and case is
+    preserved, so ``north`` and ``North`` are two different regions.
+    """
+    region = text.strip(ASCII_WHITESPACE)
+    return region if region else None
+
+
+def parse_amount(text):
+    """Return the exact value of an amount cell, or None when it is malformed.
+
+    Only a plain decimal is accepted. The value is kept as an exact
+    ``Fraction`` so sums never accumulate binary floating-point error.
+    """
+    if not AMOUNT_RE.match(text):
+        return None
+    try:
+        return Fraction(Decimal(text))
+    except (InvalidOperation, ValueError):  # defensive: the regex fixes the shape
+        return None
+
+
+def round_cents(value):
+    """Round an exact value to integer cents, half away from zero.
+
+    AMB-003 (half-up): an exact half goes away from zero. The comparison uses
+    the exact remainder, never a binary approximation.
     """
     sign = -1 if value < 0 else 1
-    numerator = abs(value.numerator) * 100
-    denominator = value.denominator
+    magnitude = abs(value)
+    numerator = magnitude.numerator * 100
+    denominator = magnitude.denominator
     whole, remainder = divmod(numerator, denominator)
     # AMB-003 (half-up): `>=` sends an exact half away from zero; `>` would be
     # the truncate behaviour this decision rejects.
@@ -160,92 +139,92 @@ def rounded_cents(value):
     return sign * whole
 
 
+def format_cents(cents):
+    """Render integer cents with exactly two decimals and no grouping."""
+    sign = "-" if cents < 0 else ""
+    magnitude = abs(cents)
+    return "%s%d.%02d" % (sign, magnitude // 100, magnitude % 100)
+
+
 def format_value(value):
     """Render an exact value with two decimals, half away from zero (AMB-003)."""
-    return format_cents(rounded_cents(value))
+    return format_cents(round_cents(value))
 
 
 def summarise(records):
-    """Build the report lines from an iterable of CSV records.
-
-    Returns the region lines in ascending UTF-8 byte order of the region string,
-    then exactly one TOTAL line, then the SKIPPED line when any row was skipped.
-    """
+    """Build the report lines from an iterable of CSV records."""
     iterator = iter(records)
     try:
         first = next(iterator)
     except StopIteration:
-        # No records at all: there is no data row and nothing to aggregate.
-        return ["TOTAL 0 0.00"]
+        # REQ-012: an empty file is unusable, not an empty report.
+        raise InputError("empty file: no header row")
 
-    if looks_like_header(first):
-        # REQ-001: the header row is never a data row, so it is not counted and
-        # not skipped either.
-        data = iterator
-    else:
-        # The declared sample has no header: its first line is a data row.
-        data = _prepend(first, iterator)
+    width, region_index, amount_index = header_columns(first)
 
-    groups = {}  # region -> [count, exact raw sum]
+    groups = {}  # trimmed region -> [count, exact Fraction sum]
     skipped = 0
 
-    for record in data:
-        parsed = parse_row(record)
-        if parsed is None:
-            # AMB-001 (skip-count): an unusable row is skipped and excluded from
-            # every aggregate, and the run reports it on the SKIPPED line instead
-            # of aborting. One counter increment per unusable row.
+    for record in iterator:
+        # AMB-001 (skip-count): malformed = unparsable record, wrong field
+        # count, blank region, or a non-decimal amount. Each such row is
+        # skipped once, excluded from every aggregate, and counted.
+        if record is MALFORMED or len(record) != width:
             skipped += 1
             continue
-        region, amount = parsed
+
+        region = parse_region(record[region_index])
+        if region is None:
+            # AMB-001 (skip-count): a blank region cell makes the row malformed.
+            skipped += 1
+            continue
+
+        amount = parse_amount(record[amount_index])
+        if amount is None:
+            # AMB-001 (skip-count): a non-decimal amount makes the row malformed.
+            # AMB-003 (half-up): negative and zero amounts are valid measures,
+            # they are not malformed; this branch only rejects unreadable text.
+            skipped += 1
+            continue
+
         group = groups.get(region)
         if group is None:
-            # AMB-002 (merge): a repeated region is not an error or a conflict;
-            # its rows accumulate into the one aggregate printed for it.
             groups[region] = [1, amount]
         else:
+            # AMB-002 (merge): every occurrence is its own sales record; all
+            # rows of one region accumulate into its single aggregate line.
             group[0] += 1
-            # AMB-002 (merge): every occurrence counts as its own order, so the
-            # count and the raw sum grow with each row of this region.
             group[1] += amount
 
     lines = []
-    total_count = 0
+    total_orders = 0
     total_cents = 0
-    # REQ-005: region lines are emitted in ascending byte order of the region
-    # string, so the report is deterministic and independent of row order.
+
+    # REQ-011: region lines in ascending byte order of the region name, so the
+    # report depends only on the multiset of valid rows.
     for region in sorted(groups, key=lambda name: name.encode("utf-8")):
-        count, raw_sum = groups[region]
-        # REQ-006: the printed sum is the rounded total of the raw amounts; the
-        # printed mean divides the UNROUNDED region sum by the count and rounds
-        # only for printing.
-        sum_cents = rounded_cents(raw_sum)
-        mean = Fraction(raw_sum, count)
+        orders, raw_sum = groups[region]
+        # REQ-003 / AMB-003: revenue is the region's rounded raw sum; the mean
+        # divides the UNROUNDED sum by the count and is rounded only for output.
+        revenue_cents = round_cents(raw_sum)
+        average_cents = round_cents(Fraction(raw_sum, orders))
+        # AMB-004 (exact-trimmed): the printed id is the trimmed, case-exact key.
         lines.append(
-            "%s %d %s %s"
-            % (region, count, format_cents(sum_cents), format_value(mean))
+            "%s %s %s"
+            % (region, format_cents(revenue_cents), format_cents(average_cents))
         )
-        total_count += count
-        # REL-003 (additivity): the totals line is the sum of the very printed
-        # region sums, so the per-region sums add up to the TOTAL sum exactly.
-        total_cents += sum_cents
+        total_orders += orders
+        # REL-002 (additivity): the printed total is the sum of the printed
+        # per-region revenues, so the report always adds up exactly.
+        total_cents += revenue_cents
 
-    # REQ-003: exactly one totals line, after the region lines. With no data
-    # rows it is the only line: "TOTAL 0 0.00".
-    lines.append("TOTAL %d %s" % (total_count, format_cents(total_cents)))
-    # AMB-001 (skip-count): report how many rows were skipped. A clean file
-    # prints no SKIPPED line, so a header-only file is exactly one line
-    # (REQ-003) and the line stays the final line of the report.
-    if skipped:
-        lines.append("SKIPPED %d" % skipped)
+    # AMB-001 (skip-count): one line carrying the number of skipped rows,
+    # printed even when it is zero (REQ-005). It follows the region lines.
+    lines.append("SKIPPED %d" % skipped)
+    # REQ-004: exactly one totals line, after the SKIPPED line. With no valid
+    # rows this is "TOTAL 0.00 0".
+    lines.append("TOTAL %s %d" % (format_cents(total_cents), total_orders))
     return lines
-
-
-def _prepend(head, iterator):
-    """Yield ``head`` then everything from ``iterator``."""
-    yield head
-    for item in iterator:
-        yield item
 
 
 def main(argv):
@@ -258,14 +237,20 @@ def main(argv):
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as handle:
             lines = summarise(read_records(handle))
+    except InputError as exc:
+        sys.stderr.write("summary.sh: %s: %s\n" % (path, exc))
+        return 1
     except OSError as exc:
-        sys.stderr.write("summary.sh: cannot read %s: %s\n" % (path, exc.strerror or exc))
+        sys.stderr.write(
+            "summary.sh: cannot read %s: %s\n" % (path, exc.strerror or exc)
+        )
         return 1
     except UnicodeDecodeError:
         sys.stderr.write("summary.sh: %s is not valid UTF-8 text\n" % path)
         return 1
 
-    # REQ-001: stdout carries report lines only; diagnostics go to stderr.
+    # REQ-012: stdout carries report lines only; fatal input errors never leave
+    # a partial report behind because the whole report is built first.
     sys.stdout.write("\n".join(lines) + "\n")
     return 0
 

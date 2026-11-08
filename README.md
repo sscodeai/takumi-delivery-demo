@@ -7,56 +7,57 @@ access.
 bash summary.sh sales.csv
 ```
 
-The input is a CSV of sales records whose first line is normally the header
-naming the columns `region,amount`:
+The input is a CSV whose first line is a header naming the columns `region` and
+`amount`:
 
 ```
 region,amount
-North,120.50
-North,99.50
-South,80.00
+north,100.00
+south,50.00
+north,25.50
+east,10.25
 ```
 
-The header is matched case-insensitively after trimming surrounding blanks, so
-` REGION , Amount ` is still the header and is never counted as a data row
-(REQ-001). The requirement document's declared sample carries no header line,
-so a first line that is not that header is read as data instead of being
-dropped -- `North,120.50` is an order, not a header.
+Columns are resolved by header name, so `amount,region` works identically
+(REQ-002). Header names are matched after trimming surrounding blanks and
+folding case; a header without both required columns is a fatal error.
 
 The report goes to standard output:
 
 ```
-East 1 45.25 45.25
-North 2 220.00 110.00
-South 1 80.00 80.00
-TOTAL 4 345.25
+east 10.25 10.25
+north 125.50 62.75
+south 50.00 50.00
+SKIPPED 0
+TOTAL 185.75 4
 ```
 
-* one `<region> <count> <sum> <mean>` line per distinct region, sorted ascending
-  by the UTF-8 bytes of the region string, so the report does not depend on row
-  order (REQ-002, REQ-005, REQ-007);
-* `count` is the number of usable rows of that region, `sum` their total revenue
-  and `mean` their average order value; count has no decimal point and sum and
-  mean always carry exactly two decimal places (REQ-002, REQ-006);
-* a repeated region merges into its single line: every row is its own order
-  (AMB-002);
-* the region key is used verbatim, so `North`, `north` and `North ` are three
-  regions (AMB-005);
-* `TOTAL <count> <sum>` is printed exactly once, after the region lines, over
-  every usable row (REQ-003). A header-only file prints only `TOTAL 0 0.00`
-  and exits 0;
-* an unusable row -- a field count other than two, an empty or whitespace-only
-  region, or an amount that is not a plain decimal -- is skipped and excluded
-  from every aggregate, and `SKIPPED <skipped-count>` is printed as the last
-  line only when at least one row was skipped (REQ-004, AMB-001). A clean file
-  prints no `SKIPPED` line;
-* only a plain decimal amount is accepted: optional sign, digits and an
-  optional fractional part. `$5.00`, `1,000.50`, `50%`, `1e3`, `.5` and ` 5`
-  are unusable rows (AMB-004).
+* one `<region> <revenue> <average_order_value>` line per distinct region
+  (REQ-003), sorted ascending by the UTF-8 bytes of the region string, so the
+  report does not depend on row order (REQ-011);
+* `revenue` is the region's amount sum and `average_order_value` is that sum
+  divided by the region's counted rows; both always carry exactly two decimals
+  (REQ-007);
+* the region key is the cell trimmed of surrounding ASCII whitespace and
+  compared case-sensitively, so `north`, `North` and ` north ` group as `north`
+  and `North` (REQ-008, AMB-004);
+* every row is its own sales record: a repeated `(region, amount)` pair adds to
+  the region's revenue, order count and average again (REQ-006, AMB-002);
+* a row with the wrong field count, a blank region cell or a non-decimal amount
+  is skipped, excluded from every aggregate and counted on the `SKIPPED` line
+  (REQ-005, AMB-001). `SKIPPED 0` is printed for a clean file;
+* `TOTAL <revenue> <orders>` is printed exactly once, after the `SKIPPED` line,
+  over every counted row (REQ-004). Its revenue is the sum of the printed
+  per-region revenues, so the report adds up exactly (REL-002);
+* a header-only file prints exactly `SKIPPED 0` and `TOTAL 0.00 0` and exits 0
+  (REQ-010); an empty or unreadable file exits non-zero with a diagnostic on
+  standard error and no report on standard output (REQ-012);
+* negative (refund) and zero amounts are valid measures, not malformed rows
+  (REQ-009).
 
-All arithmetic is exact (`fractions.Fraction`), never binary floating point, and
-printed values are rounded half away from zero at the second decimal place
-(AMB-003). Repeated runs therefore print byte-identical output.
+All arithmetic is exact (`fractions.Fraction` from `decimal.Decimal`), never
+binary floating point, and values are rounded half away from zero at the second
+decimal place (AMB-003). Repeated runs therefore print byte-identical output.
 
 ## Tests
 
@@ -69,7 +70,7 @@ criterion and every `AMB-nnn` decision in `docs/requirements/intake.yaml`. The
 report is written to `reports/tests.tap` and echoed to stdout; the runner
 returns non-zero when any check fails. `docs/test-plan.md` maps each acceptance
 criterion to the checks that cover it, and `docs/decisions.md` records where
-each decision is implemented.
+each decision is implemented (grep `AMB-00` in the source).
 
 The runner also executes the inherited `passrate` suite from the previous
 delivery in this repository (`tests/test_passrate.py`, `tests/test_units.py`),
@@ -80,9 +81,8 @@ part of this requirement.
 bash mutation.sh
 ```
 
-`npx stryker run --reporters json` (or `bash mutation.sh`) mutates the inherited
-`passrate.py` and reports survivors; it is inherited with that tool and is not
-required by this delivery.
+`bash mutation.sh` mutates the inherited `passrate.py` and reports survivors; it
+is inherited with that tool and is not required by this delivery.
 
 ## Continuous integration
 
