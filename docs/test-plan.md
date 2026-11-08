@@ -29,19 +29,20 @@ Test entry point: `bash run-tests.sh`.
 | REQ-002 | blank lines ignored, surrounding whitespace ignored | `test_blank_lines_are_ignored`, `test_surrounding_whitespace_on_fields_is_ignored` |
 | REQ-003 | `45/50` prints `90.0`; `2/3` prints `66.7` | `test_declared_sample_with_header_produces_the_required_report`, `test_two_thirds_rounds_half_up_to_66_7`, `test_format_percentage_uses_one_decimal` |
 | REQ-003 | every percentage has exactly one decimal place | `test_every_percentage_has_exactly_one_decimal_place` |
+| REL-001 | every printed percentage is its printed numerator/denominator rounded half-up | `test_each_printed_percentage_matches_the_declared_derived_ratio`, `test_format_percentage_matches_half_up_for_every_small_ratio` |
 | REQ-004 | one line per distinct suite in first-appearance order, then one `TOTAL` line | `test_declared_sample_with_header_produces_the_required_report`, `test_duplicate_suites_merge_in_first_appearance_order`, `test_build_report_prints_first_appearance_order_and_totals` |
 | REQ-004 | `TOTAL` is last and additive over the printed suite lines | `test_total_line_is_last_and_sum_of_printed_suite_lines` |
-| REQ-004 | no percent sign and no header label | `test_no_line_contains_a_percent_sign`, `test_header_text_is_never_emitted_as_a_suite_line` |
-| REQ-005 | the three non-mechanised policies are documented and enacted | `test_readme_documents_each_non_mechanised_policy`; the AMB rows below |
+| REQ-004 | no percent sign and no header label | `test_no_line_contains_a_percent_sign`, `test_no_report_line_carries_a_header_label_or_percent_sign`, `test_header_text_is_never_emitted_as_a_suite_line` |
+| REQ-005 | the three non-mechanised policies are documented exactly once and not claimed as mechanised | `test_readme_documents_each_non_mechanised_policy`, `test_no_declared_relation_claims_the_edge_case_policies`; the AMB rows below |
 
 ## Ambiguities
 
 | id | answer | checks |
 | --- | --- | --- |
-| AMB-001 | `half-up`: percentages round half away from zero to one decimal | `test_two_thirds_rounds_half_up_to_66_7`, `test_an_exact_half_rounds_away_from_zero`, `test_format_percentage_rounds_an_exact_half_up` |
+| AMB-001 | `half-up`: percentages round half away from zero to one decimal | `test_two_thirds_rounds_half_up_to_66_7`, `test_an_exact_half_rounds_away_from_zero`, `test_format_percentage_rounds_an_exact_half_up`, `test_format_percentage_matches_half_up_for_every_small_ratio` |
 | AMB-002 | `merge`: repeated suite names are summed into one line at first appearance | `test_duplicate_suites_merge_in_first_appearance_order`, `test_build_report_merges_repeated_suites` |
 | AMB-003 | `zero-rate`: a zero total prints a suite line with `0.0` | `test_zero_total_suite_prints_zero_point_zero`, `test_format_percentage_zero_total_is_zero_point_zero`, `test_build_report_prints_zero_rate_for_a_zero_total` |
-| AMB-004 | `stop-error`: an unparseable row stops the run naming its line | `test_malformed_rows_stop_with_a_nonzero_exit_and_name_the_line`, `test_a_late_malformed_row_leaves_no_partial_report`, `test_parse_row_rejects_every_malformed_shape_naming_the_line` |
+| AMB-004 | `stop-error`: an unparseable row stops the run naming its line | `test_malformed_rows_stop_with_a_nonzero_exit_and_name_the_line`, `test_a_late_malformed_row_leaves_no_partial_report`, `test_blank_lines_do_not_shift_the_reported_error_line`, `test_parse_row_rejects_every_malformed_shape_naming_the_line` |
 
 ## Decision record
 

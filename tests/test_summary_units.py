@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -58,6 +59,21 @@ def test_format_percentage_rounds_an_exact_half_up() -> None:
     # 1/16 = 6.25% and 1/32 = 3.125%; one decimal rounds them to 6.3 and 3.1.
     assert summary.format_percentage(1, 16) == "6.3"
     assert summary.format_percentage(1, 32) == "3.1"
+
+
+def test_format_percentage_matches_half_up_for_every_small_ratio() -> None:
+    # An exhaustive grid keeps AMB-001 and REL-001 honest beyond the fixtures:
+    # each value is compared with Decimal's ROUND_HALF_UP definition.
+    for total in range(1, 101):
+        for passed in range(total + 1):
+            expected = format(
+                (Decimal(passed) / Decimal(total) * 100).quantize(
+                    Decimal("0.1"), rounding=ROUND_HALF_UP
+                ),
+                "f",
+            )
+            actual = summary.format_percentage(passed, total)
+            assert actual == expected, (passed, total, actual, expected)
 
 
 def test_format_percentage_zero_total_is_zero_point_zero() -> None:
@@ -185,6 +201,7 @@ TESTS = (
     test_parse_count_rejects_non_integers_and_signs,
     test_format_percentage_uses_one_decimal,
     test_format_percentage_rounds_an_exact_half_up,
+    test_format_percentage_matches_half_up_for_every_small_ratio,
     test_format_percentage_zero_total_is_zero_point_zero,
     test_header_order_recognises_the_declared_header,
     test_header_order_rejects_data_and_wrong_headers,

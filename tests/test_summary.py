@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
@@ -37,6 +38,26 @@ BASIC_REPORT = (
 )
 
 PERCENTAGE = re.compile(r"^\d+\.\d$")
+
+REPORT_FIXTURES = (
+    "basic.csv",
+    "headerless.csv",
+    "header_only.csv",
+    "header_only_blank.csv",
+    "duplicates.csv",
+    "rounding.csv",
+    "zero_total.csv",
+)
+
+
+def derived_percentage(passed: int, total: int) -> str:
+    """The REL-001 value: passed/total*100 rounded half-up to one decimal."""
+    if total == 0:  # AMB-003 (zero-rate)
+        return "0.0"
+    value = (Decimal(passed) / Decimal(total) * 100).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+    return format(value, "f")
 
 
 def run_tool(*args: str) -> subprocess.CompletedProcess:
@@ -163,6 +184,30 @@ def test_zero_total_suite_prints_zero_point_zero() -> None:
     )
 
 
+def test_each_printed_percentage_matches_the_declared_derived_ratio() -> None:
+    # REL-001: every printed percentage is its printed numerator divided by its
+    # printed denominator, times 100, rounded to one decimal the AMB-001 way.
+    for name in REPORT_FIXTURES:
+        result = run_tool(str(FIXTURES / name))
+        assert result.returncode == 0, (name, result.stderr)
+        for line in suite_lines(result.stdout):
+            suite, passed, total, percentage = line.split(" ")
+            assert percentage == derived_percentage(int(passed), int(total)), (
+                name,
+                line,
+            )
+
+
+def test_no_report_line_carries_a_header_label_or_percent_sign() -> None:
+    for name in REPORT_FIXTURES:
+        result = run_tool(str(FIXTURES / name))
+        assert result.returncode == 0, (name, result.stderr)
+        for line in report_lines(result.stdout):
+            assert "%" not in line, (name, line)
+            assert not line.casefold().startswith("suite "), (name, line)
+            assert line.casefold() != "suite passed total", (name, line)
+
+
 def test_total_line_is_last_and_sum_of_printed_suite_lines() -> None:
     for name in ("basic.csv", "duplicates.csv", "rounding.csv", "zero_total.csv"):
         result = run_tool(str(FIXTURES / name))
@@ -268,6 +313,18 @@ def test_a_late_malformed_row_leaves_no_partial_report() -> None:
     assert result.stdout == ""
 
 
+def test_blank_lines_do_not_shift_the_reported_error_line() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "late-error.csv"
+        path.write_text(
+            "suite,passed,total\n\nlogin,45,50\nbad,1\n", encoding="utf-8"
+        )
+        result = run_tool(str(path))
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "line 4" in result.stderr, result.stderr
+
+
 def test_input_file_is_not_modified() -> None:
     path = FIXTURES / "basic.csv"
     before = path.read_bytes()
@@ -289,6 +346,8 @@ TESTS: Sequence = (
     test_every_percentage_has_exactly_one_decimal_place,
     test_duplicate_suites_merge_in_first_appearance_order,
     test_zero_total_suite_prints_zero_point_zero,
+    test_each_printed_percentage_matches_the_declared_derived_ratio,
+    test_no_report_line_carries_a_header_label_or_percent_sign,
     test_total_line_is_last_and_sum_of_printed_suite_lines,
     test_no_line_contains_a_percent_sign,
     test_blank_lines_are_ignored,
@@ -300,6 +359,7 @@ TESTS: Sequence = (
     test_directory_path_is_an_error,
     test_malformed_rows_stop_with_a_nonzero_exit_and_name_the_line,
     test_a_late_malformed_row_leaves_no_partial_report,
+    test_blank_lines_do_not_shift_the_reported_error_line,
     test_input_file_is_not_modified,
 )
 

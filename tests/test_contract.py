@@ -27,6 +27,13 @@ AMBIGUITIES = ("AMB-001", "AMB-002", "AMB-003", "AMB-004")
 SUMMARY = ROOT / "summary.py"
 DECISIONS = ROOT / "docs" / "decisions.md"
 README = ROOT / "README.md"
+REQUIREMENT = ROOT / "docs" / "requirements" / "intake.yaml"
+
+POLICY_MARKERS = {
+    "AMB-002": ("merge", "sum"),
+    "AMB-003": ("0.0",),
+    "AMB-004": ("non-zero", "line"),
+}
 
 
 def read(path: Path) -> str:
@@ -89,8 +96,24 @@ def test_decisions_document_marks_the_defaulted_answers() -> None:
 
 def test_readme_documents_each_non_mechanised_policy() -> None:
     text = read(README)
+    lines = text.splitlines()
+    for ambiguity, markers in POLICY_MARKERS.items():
+        # REQ-005: exactly one documented policy per non-mechanised ambiguity.
+        assert text.count(ambiguity) == 1, ambiguity
+        index = next(i for i, line in enumerate(lines) if ambiguity in line)
+        block = "\n".join(lines[index : index + 3]).lower()
+        for marker in markers:
+            assert marker in block, (ambiguity, marker, block)
+
+
+def test_no_declared_relation_claims_the_edge_case_policies() -> None:
+    # REQ-005: only AMB-001 is mechanised (REL-001). The duplicate-suite,
+    # zero-total and malformed-row policies are documented but not claimed as
+    # checked by a declared relation.
+    document = read(REQUIREMENT)
+    assert "decides: AMB-001" in document
     for ambiguity in ("AMB-002", "AMB-003", "AMB-004"):
-        assert ambiguity in text, ambiguity
+        assert "decides: %s" % ambiguity not in document, ambiguity
 
 
 def test_run_tests_script_names_the_delivered_suites() -> None:
@@ -125,6 +148,7 @@ TESTS = (
     test_decisions_document_has_a_row_for_every_ambiguity_with_an_anchor,
     test_decisions_document_marks_the_defaulted_answers,
     test_readme_documents_each_non_mechanised_policy,
+    test_no_declared_relation_claims_the_edge_case_policies,
     test_run_tests_script_names_the_delivered_suites,
     test_the_delivery_pipeline_is_kept_and_runs_the_deliverable,
     test_shipped_sample_is_the_declared_sample_under_a_header,
