@@ -1,6 +1,6 @@
 confirmation:
   by: "SS"
-  at: "2026-11-03T17:34:15.572Z"
+  at: "2026-11-08T13:18:29.616Z"
   method: standing-authorization
   authorization:
     ref: "docs/authorizations/SA-002.yaml"
@@ -10,140 +10,188 @@ confirmation:
     expiresAt: "2026-11-11T02:38:35Z"
   defaulted:
     - id: AMB-001
-      question: "How is the one-decimal percentage rounded when the stored value falls exactly on a half, and how does an independent recomputation round it?"
-      chosen: "half-up: round half away from zero, so 96.05 becomes 96.1"
-      class: derived-ratio
+      question: "What happens to a data row that cannot be used (wrong field count, empty region, non-numeric amount)?"
+      chosen: "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+      class: malformed-row-accounting
+      policy: document-default
+      checkedAs: skip-count
+    - id: AMB-002
+      question: "When the same region key appears on several data rows, what does the report do with those rows?"
+      chosen: "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+      class: duplicate-resolution
+      policy: document-default
+      checkedAs: merge
+    - id: AMB-003
+      question: "How do the printed sums and averages round when the exact value has more than two decimal places?"
+      chosen: "half-up: round half away from zero at the second decimal place"
+      class: independent-aggregation
       policy: document-default
       checkedAs: half-up
-    - id: AMB-002
-      question: "When the same suite name appears on several rows, which occurrence wins?"
-      chosen: "merge: every row of that suite counts, so passed and total are summed into one line"
+    - id: AMB-004
+      question: "How should the amount field be parsed before it is summed?"
+      chosen: "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
       class: unmechanised
       policy: document-default
-    - id: AMB-003
-      question: "What happens to a data row that cannot yield a percentage (wrong field count, non-integer or negative passed/total, or total equal to zero)?"
-      chosen: "skip-count: skip the row, exclude it from the totals, and report it on a SKIPPED line"
+    - id: AMB-005
+      question: "Is the region key compared exactly as written, or normalised before grouping?"
+      chosen: "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
       class: unmechanised
       policy: document-default
 
 requirements:
   - id: REQ-001
-    title: "Provide a CLI entry point that reads the CSV path given as its first argument"
-    description: "The deliverable must ship an executable script `passrate.sh` at the repository root, invoked as `bash passrate.sh <csv>`, which reads the CSV file named by its first argument, writes its report to stdout, writes nothing to stdout that is not part of the declared output shapes, and exits with status 0 on a well-formed input."
+    title: "Provide a CSV summarising entry point"
+    description: "The deliverable is a command-line tool invoked as `bash summary.sh <csv>` from the repository root. summary.sh is the only entry point, takes the CSV path as $1, reads a CSV whose first line is the header `region,amount`, and exits 0 after printing the report to stdout. It must not require network access or a build step, and it must print nothing but report lines to stdout (diagnostics, if any, go to stderr)."
     acceptance_criteria:
-      - "`bash passrate.sh <sample.csv>` on the declared sample exits with status 0."
-      - "`passrate.sh` exists at the repository root and takes the input file as `$1`; a judge substitutes its own fixture path for `{csv}`."
-      - "A missing or unreadable input path makes the command exit non-zero and write a diagnostic to stderr."
+      - "`bash summary.sh sample.csv` on a well-formed file exits 0 and writes report lines to stdout."
+      - "The script is named summary.sh, sits at the repository root, and reads the input path from its first positional argument."
+      - "The first line of the input is treated as the header row and is never counted as a data row, even when the header names differ in case or surrounding whitespace."
     priority: High
-    source: "'I want a command-line tool that reads a CSV of test run records'"
+    source: "I want a command-line tool that reads a CSV of sales records; CSV has a header row with columns region, amount"
 
   - id: REQ-002
-    title: "Print one line per suite with the pass percentage rounded to one decimal place"
-    description: "For every distinct value of the `suite` column the tool prints exactly one report line `<suite> <passed> <total> <pct>`, where `<passed>` and `<total>` are the integers that entered the computation for that suite and `<pct>` is `passed / total * 100` rendered with exactly one digit after the decimal point, rounded the way AMB-001 decides."
+    title: "Print total revenue and average order value per region"
+    description: "For every distinct region value in the data rows, print exactly one region line of the form `<region> <count> <sum> <mean>`, where count is the number of data rows attributed to that region, sum is the total revenue (sum of the amount column) for that region, and mean is the average order value (sum divided by count) for that region. Sum and mean are printed with exactly two decimal places; count is an integer with no decimal point."
     acceptance_criteria:
-      - "A suite with passed=48, total=50 prints `48` and `50` and a percentage rendered as `96.0`."
-      - "A suite with passed=17, total=20 prints `85.0`."
-      - "Every per-suite line carries exactly one fractional digit in its percentage, including whole values such as 100 and 0 (printed `100.0`, `0.0`)."
-      - "The percentage is derived from the same passed and total printed on that same line."
+      - "A file containing `North,120.50` and `North,99.50` and `South,80.00` prints a North line whose count is 2, whose sum is 220.00 and whose mean is 110.00, and a South line whose count is 1, whose sum is 80.00 and whose mean is 80.00."
+      - "Every distinct region in the data rows appears on exactly one region line and no region line names a region absent from the data rows."
+      - "Each region line's field values appear positionally in the order region, count, sum, mean, separated by single spaces."
     priority: High
-    source: "'prints one line per suite with the pass percentage rounded to one decimal place'"
+    source: "prints the total revenue and the average order value per region"
 
   - id: REQ-003
-    title: "Locate the columns by the header names, not by fixed positions"
-    description: "The first CSV line is a header naming the columns `suite`, `passed` and `total`. The tool resolves each of those three columns by header name, so a file whose columns are in a different order, or that carries additional columns, is still read correctly; the header line itself is never reported as data."
+    title: "Print a whole-report totals line"
+    description: "After the region lines, print exactly one totals line of the form `TOTAL <count> <sum>`, where count is the number of usable data rows across all regions and sum is the total revenue across all regions, formatted like the region-line numbers (integer count, two-decimal sum). For an input with a header row and no data rows, print only the totals line, with count 0 and sum 0.00, and exit 0."
     acceptance_criteria:
-      - "A fixture whose header order is `total,suite,passed` yields the same report as the declared sample."
-      - "No report line is produced from the header row."
-      - "A header missing any of `suite`, `passed`, `total` makes the command exit non-zero naming the missing column."
+      - "Exactly one line in the output starts with `TOTAL `."
+      - "For the sample world, the totals line is `TOTAL 4 345.25` and it follows all region lines."
+      - "A header-only file produces the single line `TOTAL 0 0.00` and exit status 0."
     priority: High
-    source: "'The CSV has a header row with columns: suite, passed, total.'"
+    source: "prints the total revenue ... (the whole, not only per region)"
 
   - id: REQ-004
-    title: "Print one totals line summing the passed and total columns"
-    description: "After the per-suite lines the tool prints exactly one summary line `TOTAL <passed_sum> <total_sum>` whose two integers are the sums of the `passed` and of the `total` values over every row that was counted. The request asks for no overall percentage, so the totals line carries none."
+    title: "Handle unusable data rows as decided"
+    description: "A data row is unusable when it does not have exactly two fields, when the region field is empty or whitespace-only, or when the amount field is not a plain decimal number (optional leading minus, digits, optional fractional part). Unusable rows are handled the way AMB-001 decides; a row that is skipped is excluded from every aggregate and from the totals line, and a file a human reads still shows how many rows were skipped when AMB-001 says to count them."
     acceptance_criteria:
-      - "Exactly one line matching the totals shape is printed, and it is printed after the per-suite lines."
-      - "On the declared sample the totals line reads `TOTAL 165 174` (48+17+99+1+0 and 50+20+100+1+3)."
-      - "The totals are printed even when the input has a single suite."
+      - "A file with one well-formed row and one row whose amount is `abc` still exits 0 under the default decision and prints region aggregates computed only from the well-formed row."
+      - "Skipped rows never contribute to any region count, region sum, region mean, or the totals line."
+      - "The number of skipped rows reported, if reported, equals the number of unusable data rows in the input."
     priority: High
-    source: "'one line per suite' plus the report's whole; the request does not ask for an overall percentage"
+    source: "CSV ... columns: region, amount (the request does not say what a broken row does)"
 
   - id: REQ-005
-    title: "Merge every row that names the same suite into that suite's single line"
-    description: "When the `suite` value repeats, all of its rows contribute to one report line: the printed `<passed>` and `<total>` are the sums over those rows, and the percentage is computed from those sums. This is the behaviour AMB-002 selects; no automated relation in this document checks it yet, so it is carried here as requirement text and acceptance criterion only."
+    title: "Aggregate repeated region keys into one region line"
+    description: "A region value repeating across rows is not an error and not a conflict: every data row is its own order and all rows sharing a region key contribute to that region's single count, sum and mean, as AMB-002 decides. Region lines are emitted in ascending byte order of the region string so that the output is deterministic."
     acceptance_criteria:
-      - "A fixture with two `auth` rows (48/50 and 1/1) prints one `auth` line with passed=49, total=51 and percentage `96.1`."
-      - "The number of per-suite lines equals the number of distinct `suite` values, not the number of data rows."
-    priority: Medium
-    source: "'one line per suite' — the input may name the same suite on several rows"
+      - "Two rows with region `North` produce one North line whose count is 2 rather than two North lines."
+      - "Region lines appear in ascending byte order of the region string."
+      - "No region key is dropped or merged with a differently spelled region key."
+    priority: High
+    source: "per region (region is a group key, so it repeats by nature)"
 
   - id: REQ-006
-    title: "Skip malformed rows, count them, and never print a suite line without usable counts"
-    description: "A data row whose field count does not match the header, whose `passed` or `total` is not a non-negative integer, or whose `total` is zero, cannot produce a percentage; such a row is excluded from every suite and from the totals, and the number of excluded rows is reported on a final `SKIPPED <skipped_count>` line printed only when at least one row was skipped. This is the behaviour AMB-003 selects; no automated relation in this document checks it yet, so it is carried here as requirement text and acceptance criterion only."
+    title: "Round and format every printed number predictably"
+    description: "Sums and means are printed with exactly two decimal places using round-half-away-from-zero, as AMB-003 decides, regardless of the number of decimals present in the input. No thousands separators, currency symbols or scientific notation are printed. The sum of a region is the rounded total of its raw amounts, and the mean is computed from the unrounded region sum divided by the region count and then rounded for printing."
     acceptance_criteria:
-      - "A fixture with one unparsable `passed` value prints no line for that row's suite unless other valid rows for that suite exist, and prints `SKIPPED 1`."
-      - "A fixture in which every row is valid prints no `SKIPPED` line at all."
-      - "The totals line sums only the rows that produced a printed suite line."
-      - "A suite whose only row has total=0 produces no per-suite line and increments the skipped count."
+      - "An amount of `0.005`-style halves round away from zero at the second decimal place rather than being truncated."
+      - "Every printed sum and mean matches the regular expression `-?[0-9]+\\.[0-9]{2}`."
+      - "Input amounts written with one decimal or with none still produce two-decimal output."
     priority: Medium
-    source: "'reads a CSV of test run records' — the request does not say how unusable rows are treated"
+    source: "average order value (a quotient, so its printed precision must be settled)"
+
+  - id: REQ-007
+    title: "Make the report independent of row order"
+    description: "Shuffling the data rows of an input must not change any region line or the totals line, and must not change the order in which region lines are printed, which is fixed by the region string."
+    acceptance_criteria:
+      - "Running the tool on a file and on a row-shuffled copy of the same file yields byte-identical stdout."
+      - "Each region's count, sum and mean is unchanged by row order, including when the mean is a repeating decimal."
+    priority: Medium
+    source: "reads a CSV of sales records (no ordering is stated, so the result must not depend on it)"
+
 ambiguities:
   - id: AMB-001
-    question: "How is the one-decimal percentage rounded when the stored value falls exactly on a half, and how does an independent recomputation round it?"
+    question: "What happens to a data row that cannot be used (wrong field count, empty region, non-numeric amount)?"
     options:
-      - "half-up: round half away from zero, so 96.05 becomes 96.1"
-      - "truncate: drop every digit beyond the first decimal, so 96.09 becomes 96.0"
-    default: "half-up: round half away from zero, so 96.05 becomes 96.1"
+      - "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+      - "skip-silent: skip the unusable row silently, with no skipped line and no stderr message"
+      - "stop-error: abort the whole run with a non-zero exit status and an error message naming the offending line"
+    default: "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+    checkedAs: skip-count
+    blocking: true
+    chosen: "skip-count: skip the unusable row, exclude it from all aggregates, and report the number skipped on a `SKIPPED <skipped-count>` line"
+  - id: AMB-002
+    question: "When the same region key appears on several data rows, what does the report do with those rows?"
+    options:
+      - "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+      - "last-row: only the last occurrence of the region is kept and earlier rows with that region are discarded"
+      - "error: a repeated region key is a hard failure with a non-zero exit status"
+    default: "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+    checkedAs: merge
+    blocking: true
+    chosen: "merge: every occurrence counts as its own order, so all rows with that region form one aggregate"
+  - id: AMB-003
+    question: "How do the printed sums and averages round when the exact value has more than two decimal places?"
+    options:
+      - "half-up: round half away from zero at the second decimal place"
+      - "truncate: drop everything after the second decimal place without rounding"
+    default: "half-up: round half away from zero at the second decimal place"
     checkedAs: half-up
     blocking: true
-    chosen: "half-up: round half away from zero, so 96.05 becomes 96.1"
-  - id: AMB-002
-    question: "When the same suite name appears on several rows, which occurrence wins?"
+    chosen: "half-up: round half away from zero at the second decimal place"
+  - id: AMB-004
+    question: "How should the amount field be parsed before it is summed?"
     options:
-      - "merge: every row of that suite counts, so passed and total are summed into one line"
-      - "last-row: only the last occurrence of that suite is kept"
-      - "first-row: only the first occurrence of that suite is kept"
-      - "error: a repeated suite name stops the command with a non-zero exit"
-    default: "merge: every row of that suite counts, so passed and total are summed into one line"
+      - "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
+      - "tolerant: strip currency symbols, thousands separators and surrounding whitespace, then parse what remains as a decimal"
+    default: "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
     blocking: false
-    chosen: "merge: every row of that suite counts, so passed and total are summed into one line"
-  - id: AMB-003
-    question: "What happens to a data row that cannot yield a percentage (wrong field count, non-integer or negative passed/total, or total equal to zero)?"
+    chosen: "plain-decimal: only an optional leading sign, digits and an optional fractional part are accepted; anything else (currency symbols, thousands separators, percent signs) makes the row unusable under AMB-001"
+  - id: AMB-005
+    question: "Is the region key compared exactly as written, or normalised before grouping?"
     options:
-      - "skip-count: skip the row, exclude it from the totals, and report it on a SKIPPED line"
-      - "skip-silent: skip the row and print no trace of it"
-      - "stop-error: stop with a non-zero exit naming the offending line"
-    default: "skip-count: skip the row, exclude it from the totals, and report it on a SKIPPED line"
+      - "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
+      - "trim-fold: surrounding whitespace is stripped and the value is lowercased before grouping, and the printed key is the lowercased trimmed form"
+    default: "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
     blocking: false
-    chosen: "skip-count: skip the row, exclude it from the totals, and report it on a SKIPPED line"
+
+    chosen: "exact: the region field is used verbatim as the group key, so differing case or internal spacing yields different regions"
 deliverable:
-  run: "bash passrate.sh {csv}"
-  timeoutMs: 120000
+  run: "bash summary.sh {csv}"
+  timeoutMs: 30000
   input_format:
-    columns: "suite:id,passed:measure,total:other"
+    columns: "region:id,amount:measure"
     sample: |
-      auth,48,50
-      billing,17,20
-      search,99,100
-      auth,1,1
-      billing,0,3
+      North,120.50
+      South,80.00
+      North,99.50
+      East,45.25
   output_format:
-    suite_line:
-      shape: "<suite> <passed> <total> <pct>"
-      fields: [id, numerator, denominator, ratio]
+    region_line:
+      shape: "<region> <count> <sum> <mean>"
+      fields: [id, count, sum, mean]
     total_line:
-      shape: "TOTAL <passed_sum> <total_sum>"
-      fields: [sum, sum]
+      shape: "TOTAL <count> <sum>"
+      fields: [count, sum]
     skipped_line:
-      shape: "SKIPPED <skipped_count>"
+      shape: "SKIPPED <skipped-count>"
       fields: [skipped-count]
   relations:
     - id: REL-001
-      relation: derived-ratio
+      relation: malformed-row-accounting
       decides: AMB-001
-      description: "Every printed percentage equals its own line's printed passed divided by its own line's printed total, times 100, rounded to one decimal the way AMB-001 decided."
+      description: "An unusable row is skipped and the printed report accounts for it the way AMB-001 decided, with the skipped rows excluded from every aggregate and from the totals line."
+    - id: REL-002
+      relation: duplicate-resolution
+      decides: AMB-002
+      description: "Rows sharing a region key resolve into that region's aggregate the way AMB-002 decided."
+    - id: REL-003
+      relation: additivity
+      description: "The per-region counts sum to the count on the TOTAL line, and the per-region sums sum to the sum on the TOTAL line."
+    - id: REL-004
+      relation: row-order-invariance
+      description: "Shuffling the data rows leaves every printed line and their order unchanged."
   differential:
     - id: DIFF-001
-      anchor: derived-ratio
-      decides: AMB-001
-      description: "An independent recomputation of each suite's percentage from the printed passed and total, rounded half-up to one decimal place, matches the printed percentage, and an independent pass over the input rows yields the same set of suites and the same totals."
+      anchor: independent-aggregation
+      decides: AMB-003
+      description: "An independent recomputation of each region's count, summed revenue and average order value, rounded as AMB-003 decided, matches the tool's region lines and totals line."
