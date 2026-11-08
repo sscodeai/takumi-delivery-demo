@@ -26,10 +26,9 @@ jobs:
       - name: write the sample input the requirement document declares
         run: |
           cat > takumi-sample.csv <<'TAKUMI_SAMPLE'
-          North,120.50
-          South,80.25
-          North,99.50
-          East,45.00
+          login,45,50
+          search,19,20
+          billing,7,8
           TAKUMI_SAMPLE
       - name: run the deliverable as the requirement document declares
         run: |

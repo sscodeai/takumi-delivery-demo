@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# summary.sh -- per-region revenue and average order value from a CSV.
+# summary.sh -- per-suite pass percentage from a CSV of test-run records.
 #
 # Usage: bash summary.sh <csv>
 #
 # Contract (docs/requirements/intake.yaml, deliverable block):
 #   run:          bash summary.sh {csv}
-#   region line:  <region> <count> <sum> <mean>
-#   total line:   TOTAL <count> <sum>
-#   skipped line: SKIPPED <skipped-count>
+#   suite line:   <suite> <passed> <total> <percentage>
+#   total line:   TOTAL <passed_sum> <total_sum>
 #
 # There is no install or build step: the work happens in summary.py using only
-# the Python 3 standard library, so the command needs no network access.  The
-# input file is only ever opened for reading.
+# the Python 3 standard library, so the command needs no network access and no
+# interactive input.  The input file is only ever opened for reading.
 #
 # The decisions this delivery settled live in docs/decisions.md; in the source
 # they are marked with greppable `AMB-00n` comments (see summary.py).

@@ -13,7 +13,7 @@ with ``TAP_OUT``) by the shared runner.
 from __future__ import annotations
 
 import sys
-from decimal import Decimal
+import tempfile
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -22,270 +22,183 @@ for candidate in (str(TESTS_DIR), str(ROOT)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-import summary  # noqa: E402  (path is set up above)
+import summary  # noqa: E402
 from _tap import run_tests  # noqa: E402
 
 
-# --- REQ-002: header handling ----------------------------------------------
+def test_parse_count_accepts_non_negative_integers() -> None:
+    assert summary.parse_count("0") == 0
+    assert summary.parse_count("7") == 7
+    assert summary.parse_count(" 12 ") == 12
+    assert summary.parse_count("+5") == 5
+    assert summary.parse_count("007") == 7
 
 
-def test_looks_like_header_recognises_the_declared_names() -> None:
-    assert summary.looks_like_header(["region", "amount"]) is True
-    assert summary.looks_like_header(["amount", "region"]) is True
-    assert summary.looks_like_header(["\ufeffRegion", " Amount "]) is True
+def test_parse_count_rejects_non_integers_and_signs() -> None:
+    for text in ("", " ", "-1", "1.5", "abc", "1e3", "+", "1,2"):
+        assert summary.parse_count(text) is None, text
 
 
-def test_looks_like_header_rejects_a_data_row() -> None:
-    assert summary.looks_like_header(["North", "120.50"]) is False
+def test_format_percentage_uses_one_decimal() -> None:
+    cases = {
+        (45, 50): "90.0",
+        (2, 3): "66.7",
+        (7, 15): "46.7",
+        (19, 20): "95.0",
+        (1, 8): "12.5",
+        (1, 3): "33.3",
+        (0, 5): "0.0",
+        (5, 5): "100.0",
+    }
+    for (passed, total), expected in cases.items():
+        assert summary.format_percentage(passed, total) == expected
 
 
-def test_resolve_columns_follows_names_not_positions() -> None:
-    assert summary.resolve_columns(["region", "amount"]) == (0, 1)
-    assert summary.resolve_columns(["amount", "region"]) == (1, 0)
+def test_format_percentage_rounds_an_exact_half_up() -> None:
+    # 1/16 = 6.25% and 1/32 = 3.125%; one decimal rounds them to 6.3 and 3.1.
+    assert summary.format_percentage(1, 16) == "6.3"
+    assert summary.format_percentage(1, 32) == "3.1"
 
 
-def test_resolve_columns_ignores_extra_columns() -> None:
-    assert summary.resolve_columns(["channel", "amount", "region"]) == (2, 1)
+def test_format_percentage_zero_total_is_zero_point_zero() -> None:
+    assert summary.format_percentage(0, 0) == "0.0"
 
 
-def test_resolve_columns_rejects_a_header_without_both_columns() -> None:
-    for header in (["region", "channel"], ["amount", "channel"], ["x"]):
+def test_header_order_recognises_the_declared_header() -> None:
+    assert summary.header_order(["suite", "passed", "total"]) == (0, 1, 2)
+    assert summary.header_order(["total", "passed", "suite"]) == (2, 1, 0)
+    assert summary.header_order([" Suite ", " PASSED ", " Total "]) == (0, 1, 2)
+    assert summary.header_order(["\ufeffsuite", "passed", "total"]) == (0, 1, 2)
+
+
+def test_header_order_rejects_data_and_wrong_headers() -> None:
+    assert summary.header_order(["login", "45", "50"]) is None
+    assert summary.header_order(["suite", "passed"]) is None
+    assert summary.header_order(["suite", "passed", "total", "extra"]) is None
+    assert summary.header_order(["suite", "suite", "total"]) is None
+
+
+def test_read_records_skips_blank_lines_and_keeps_line_numbers() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "input.csv"
+        path.write_text("suite,passed,total\n\nlogin,45,50\n", encoding="utf-8")
+        records = summary.read_records(str(path))
+    assert records == [
+        (1, ["suite", "passed", "total"]),
+        (3, ["login", "45", "50"]),
+    ]
+
+
+def test_read_records_reports_an_unreadable_path() -> None:
+    try:
+        summary.read_records(str(ROOT / "does-not-exist.csv"))
+    except summary.InputError as exc:
+        assert "cannot read" in str(exc)
+    else:
+        raise AssertionError("missing file did not raise InputError")
+
+
+def test_parse_row_accepts_a_valid_record_and_trims_the_suite() -> None:
+    assert summary.parse_row([" login ", " 45 ", " 50 "], (0, 1, 2), 4) == (
+        "login",
+        45,
+        50,
+    )
+    assert summary.parse_row(["50", "45", "login"], (2, 1, 0), 4) == (
+        "login",
+        45,
+        50,
+    )
+
+
+def test_parse_row_rejects_every_malformed_shape_naming_the_line() -> None:
+    columns = (0, 1, 2)
+    malformed = (
+        ["a", "1"],
+        ["a", "1", "2", "extra"],
+        ["a", "1.5", "2"],
+        ["a", "1", "2.5"],
+        ["a", "-1", "2"],
+        ["a", "1", "-2"],
+        ["a", "3", "2"],
+        ["a", "x", "2"],
+        ["a", "1", "y"],
+    )
+    for row in malformed:
         try:
-            summary.resolve_columns(header)
-        except summary.InputError:
-            pass
+            summary.parse_row(row, columns, 9)
+        except summary.InputError as exc:
+            assert "line 9" in str(exc), (row, str(exc))
         else:
-            raise AssertionError(f"header accepted without both columns: {header}")
+            raise AssertionError("malformed row was accepted: %r" % (row,))
 
 
-def test_is_blank_record_treats_empty_and_whitespace_lines_as_blank() -> None:
-    assert summary.is_blank_record([]) is True
-    assert summary.is_blank_record(["", ""]) is True
-    assert summary.is_blank_record(["   ", "\t"]) is True
-    assert summary.is_blank_record(["North", ""]) is False
-
-
-# --- AMB-001 / AMB-004: amount parsing -------------------------------------
-
-
-def test_parse_amount_accepts_numeric_forms() -> None:
-    assert summary.parse_amount("120.50") == Decimal("120.50")
-    assert summary.parse_amount(" 7 ") == Decimal("7")
-    assert summary.parse_amount("0") == Decimal("0")
-    assert summary.parse_amount("1e3") == Decimal("1000")
-
-
-def test_parse_amount_accepts_negative_refunds() -> None:
-    # AMB-004 (include): a negative amount is a well-formed record.
-    assert summary.parse_amount("-25.00") == Decimal("-25.00")
-
-
-def test_parse_amount_rejects_unusable_values() -> None:
-    for text in ("", "   ", "abc", "1,200", "NaN", "Infinity", "-inf"):
-        assert summary.parse_amount(text) is None, text
-
-
-# --- REQ-003 / REQ-004 / REQ-005: aggregation -------------------------------
-
-
-def test_summarise_records_counts_and_sums_per_region() -> None:
-    counts, totals, skipped = summary.summarise_records(
-        ["region", "amount"],
-        [
-            ["North", "120.50"],
-            ["North", "99.50"],
-            ["South", "80.25"],
-        ],
-    )
-    assert counts == {"North": 2, "South": 1}
-    assert totals == {"North": Decimal("220.00"), "South": Decimal("80.25")}
-    assert skipped == 0
-
-
-def test_summarise_records_skips_and_counts_malformed_rows() -> None:
-    # AMB-001 (skip-count): unusable rows never reach the aggregates.
-    counts, totals, skipped = summary.summarise_records(
-        ["region", "amount"],
-        [
-            ["North", "abc"],
-            ["", "5.00"],
-            ["South"],
-            ["West", "10.00"],
-        ],
-    )
-    assert counts == {"West": 1}
-    assert totals == {"West": Decimal("10.00")}
-    assert skipped == 3
-
-
-def test_summarise_records_merges_identical_rows() -> None:
-    # AMB-002 (merge): each row is its own order, so nothing is de-duplicated.
-    counts, totals, _ = summary.summarise_records(
-        ["region", "amount"], [["North", "120.50"], ["North", "120.50"]]
-    )
-    assert counts == {"North": 2}
-    assert totals == {"North": Decimal("241.00")}
-
-
-def test_summarise_records_ignores_blank_rows() -> None:
-    counts, totals, skipped = summary.summarise_records(
-        ["region", "amount"],
-        [[], ["", ""], ["North", "1.00"]],
-    )
-    assert counts == {"North": 1}
-    assert totals == {"North": Decimal("1.00")}
-    assert skipped == 0
-
-
-def test_summarise_records_uses_named_columns() -> None:
-    counts, totals, skipped = summary.summarise_records(
-        ["amount", "channel", "region"],
-        [["1.00", "web", "North"]],
-    )
-    assert counts == {"North": 1}
-    assert totals == {"North": Decimal("1.00")}
-    assert skipped == 0
-
-
-# --- AMB-003 / REQ-006: formatting -----------------------------------------
-
-
-def test_format_amount_prints_exactly_two_decimals() -> None:
-    assert summary.format_amount(Decimal("110")) == "110.00"
-    assert summary.format_amount(Decimal("45")) == "45.00"
-    assert summary.format_amount(Decimal("0")) == "0.00"
-
-
-def test_format_amount_rounds_half_up() -> None:
-    assert summary.format_amount(Decimal("86.3125")) == "86.31"
-    assert summary.format_amount(Decimal("10.005")) == "10.01"
-    assert summary.format_amount(Decimal("2.675")) == "2.68"
-
-
-def test_format_amount_rounds_negative_halves_away_from_zero() -> None:
-    assert summary.format_amount(Decimal("-10.005")) == "-10.01"
-    assert summary.format_amount(Decimal("-2.675")) == "-2.68"
-
-
-def test_format_amount_never_prints_negative_zero() -> None:
-    assert summary.format_amount(Decimal("-0.001")) == "0.00"
-
-
-def test_format_amount_has_no_thousands_separator() -> None:
-    # REQ-006: no thousands separators and no currency symbol.
-    assert summary.format_amount(Decimal("1234567.891")) == "1234567.89"
-    assert summary.format_amount(Decimal("-1234567.891")) == "-1234567.89"
-
-
-# --- REQ-003 / REQ-004 / REQ-005: the report --------------------------------
-
-
-def test_format_report_renders_sorted_region_lines_then_total_then_skipped() -> None:
-    counts = {"South": 1, "North": 2, "East": 1}
-    totals = {
-        "South": Decimal("80.25"),
-        "North": Decimal("220.00"),
-        "East": Decimal("45.00"),
-    }
-    assert summary.format_report(counts, totals, 0) == [
-        "East 1 45.00 45.00",
-        "North 2 220.00 110.00",
-        "South 1 80.25 80.25",
-        "TOTAL 4 345.25",
-        "SKIPPED 0",
+def test_build_report_prints_first_appearance_order_and_totals() -> None:
+    records = [
+        (1, ["suite", "passed", "total"]),
+        (2, ["login", "45", "50"]),
+        (3, ["search", "19", "20"]),
+        (4, ["billing", "7", "8"]),
     ]
-
-
-def test_format_report_is_empty_apart_from_total_and_skipped() -> None:
-    assert summary.format_report({}, {}, 0) == ["TOTAL 0 0.00", "SKIPPED 0"]
-
-
-def test_format_report_always_prints_the_skipped_count_last() -> None:
-    lines = summary.format_report({"North": 1}, {"North": Decimal("1.00")}, 7)
-    assert lines[-1] == "SKIPPED 7"
-
-
-def test_format_report_has_no_overall_mean_on_the_total_line() -> None:
-    lines = summary.format_report({"North": 2}, {"North": Decimal("3.00")}, 0)
-    assert lines[-2] == "TOTAL 2 3.00"
-    assert len(lines[-2].split(" ")) == 3
-
-
-def test_format_report_rounds_a_negative_half_mean_away_from_zero() -> None:
-    # AMB-003 (half-up) applies to refunds too: -20.01 / 2 == -10.005.
-    counts, totals, skipped = summary.summarise_records(
-        ["region", "amount"], [["Refund", "-20.01"], ["Refund", "0.00"]]
+    assert summary.build_report(records) == (
+        "login 45 50 90.0\n"
+        "search 19 20 95.0\n"
+        "billing 7 8 87.5\n"
+        "TOTAL 71 78\n"
     )
-    assert summary.format_report(counts, totals, skipped) == [
-        "Refund 2 -20.01 -10.01",
-        "TOTAL 2 -20.01",
-        "SKIPPED 0",
+
+
+def test_build_report_merges_repeated_suites() -> None:
+    records = [
+        (1, ["suite", "passed", "total"]),
+        (2, ["api", "2", "3"]),
+        (3, ["web", "5", "10"]),
+        (4, ["api", "1", "3"]),
     ]
+    assert summary.build_report(records) == (
+        "api 3 6 50.0\n"
+        "web 5 10 50.0\n"
+        "TOTAL 8 16\n"
+    )
 
 
-# --- REQ-001 / REQ-009: whole-file reading ---------------------------------
+def test_build_report_prints_zero_rate_for_a_zero_total() -> None:
+    records = [
+        (1, ["suite", "passed", "total"]),
+        (2, ["empty", "0", "0"]),
+    ]
+    assert summary.build_report(records) == "empty 0 0 0.0\nTOTAL 0 0\n"
 
 
-def test_summarise_file_reads_the_declared_headerless_sample() -> None:
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "sample.csv"
-        path.write_text(
-            "North,120.50\nSouth,80.25\nNorth,99.50\nEast,45.00\n",
-            encoding="utf-8",
-        )
-        counts, totals, skipped = summary.summarise_file(str(path))
-    assert counts == {"North": 2, "South": 1, "East": 1}
-    assert totals == {
-        "North": Decimal("220.00"),
-        "South": Decimal("80.25"),
-        "East": Decimal("45.00"),
-    }
-    assert skipped == 0
+def test_build_report_with_only_a_header_is_an_empty_report() -> None:
+    assert summary.build_report([(1, ["suite", "passed", "total"])]) == "TOTAL 0 0\n"
+    assert summary.build_report([]) == "TOTAL 0 0\n"
 
 
-def test_summarise_file_returns_an_empty_report_for_a_header_only_file() -> None:
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "header_only.csv"
-        path.write_text("region,amount\n\n", encoding="utf-8")
-        counts, totals, skipped = summary.summarise_file(str(path))
-    assert counts == {}
-    assert totals == {}
-    assert skipped == 0
+def test_build_report_accepts_a_headerless_first_record() -> None:
+    records = [(1, ["login", "45", "50"])]
+    assert summary.build_report(records) == "login 45 50 90.0\nTOTAL 45 50\n"
 
 
-TESTS = [
-    test_looks_like_header_recognises_the_declared_names,
-    test_looks_like_header_rejects_a_data_row,
-    test_resolve_columns_follows_names_not_positions,
-    test_resolve_columns_ignores_extra_columns,
-    test_resolve_columns_rejects_a_header_without_both_columns,
-    test_is_blank_record_treats_empty_and_whitespace_lines_as_blank,
-    test_parse_amount_accepts_numeric_forms,
-    test_parse_amount_accepts_negative_refunds,
-    test_parse_amount_rejects_unusable_values,
-    test_summarise_records_counts_and_sums_per_region,
-    test_summarise_records_skips_and_counts_malformed_rows,
-    test_summarise_records_merges_identical_rows,
-    test_summarise_records_ignores_blank_rows,
-    test_summarise_records_uses_named_columns,
-    test_format_amount_prints_exactly_two_decimals,
-    test_format_amount_rounds_half_up,
-    test_format_amount_rounds_negative_halves_away_from_zero,
-    test_format_amount_never_prints_negative_zero,
-    test_format_amount_has_no_thousands_separator,
-    test_format_report_renders_sorted_region_lines_then_total_then_skipped,
-    test_format_report_is_empty_apart_from_total_and_skipped,
-    test_format_report_always_prints_the_skipped_count_last,
-    test_format_report_has_no_overall_mean_on_the_total_line,
-    test_format_report_rounds_a_negative_half_mean_away_from_zero,
-    test_summarise_file_reads_the_declared_headerless_sample,
-    test_summarise_file_returns_an_empty_report_for_a_header_only_file,
-]
+TESTS = (
+    test_parse_count_accepts_non_negative_integers,
+    test_parse_count_rejects_non_integers_and_signs,
+    test_format_percentage_uses_one_decimal,
+    test_format_percentage_rounds_an_exact_half_up,
+    test_format_percentage_zero_total_is_zero_point_zero,
+    test_header_order_recognises_the_declared_header,
+    test_header_order_rejects_data_and_wrong_headers,
+    test_read_records_skips_blank_lines_and_keeps_line_numbers,
+    test_read_records_reports_an_unreadable_path,
+    test_parse_row_accepts_a_valid_record_and_trims_the_suite,
+    test_parse_row_rejects_every_malformed_shape_naming_the_line,
+    test_build_report_prints_first_appearance_order_and_totals,
+    test_build_report_merges_repeated_suites,
+    test_build_report_prints_zero_rate_for_a_zero_total,
+    test_build_report_with_only_a_header_is_an_empty_report,
+    test_build_report_accepts_a_headerless_first_record,
+)
 
 
 if __name__ == "__main__":
-    sys.exit(run_tests(TESTS, "reports/tests-units.tap"))
+    raise SystemExit(run_tests(TESTS, "reports/tests-units.tap"))

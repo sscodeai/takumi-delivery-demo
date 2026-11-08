@@ -1,5 +1,6 @@
-region,amount
-Central,100.00
-Central,80.00
-Central,90.00
-Central,75.25
+suite,passed,total
+two_thirds,2,3
+exact_half,1,16
+below_half,1,32
+whole,45,50
+eighth,1,8

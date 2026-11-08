@@ -2,15 +2,14 @@
 """Acceptance tests for the delivered ``bash summary.sh``.
 
 Every check drives the real entry point in a subprocess, so what is asserted
-is the behaviour a caller (and the delivery's reviewer) sees: the exact bytes
-on stdout, the diagnostic on stderr and the exit status.
+is the behaviour a caller sees: the exact bytes on stdout, the diagnostic on
+stderr and the exit status.
 
 Contract under test (docs/requirements/intake.yaml, deliverable block)::
 
     run:          bash summary.sh {csv}
-    region line:  <region> <count> <sum> <mean>
-    total line:   TOTAL <count> <sum>
-    skipped line: SKIPPED <skipped-count>
+    suite line:   <suite> <passed> <total> <percentage>
+    total line:   TOTAL <passed_sum> <total_sum>
 
 The report is written to ``reports/tests.tap`` (override with ``TAP_OUT``)
 and echoed to stdout; the process exits 0 only when every check passes.
@@ -18,35 +17,26 @@ and echoed to stdout; the process exits 0 only when every check passes.
 
 from __future__ import annotations
 
-import os
-import random
+import re
 import subprocess
 import sys
 import tempfile
-from decimal import Decimal
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _tap import ROOT, run_tests  # noqa: E402  (path is set up above)
+from _tap import ROOT, run_tests  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
-# The exact sample the requirement document declares, which has NO header row.
-DECLARED_SAMPLE: Tuple[Tuple[str, str], ...] = (
-    ("North", "120.50"),
-    ("South", "80.25"),
-    ("North", "99.50"),
-    ("East", "45.00"),
+BASIC_REPORT = (
+    "login 45 50 90.0\n"
+    "search 19 20 95.0\n"
+    "billing 7 8 87.5\n"
+    "TOTAL 71 78\n"
 )
 
-SAMPLE_REPORT = (
-    "East 1 45.00 45.00\n"
-    "North 2 220.00 110.00\n"
-    "South 1 80.25 80.25\n"
-    "TOTAL 4 345.25\n"
-    "SKIPPED 0\n"
-)
+PERCENTAGE = re.compile(r"^\d+\.\d$")
 
 
 def run_tool(*args: str) -> subprocess.CompletedProcess:
@@ -55,604 +45,264 @@ def run_tool(*args: str) -> subprocess.CompletedProcess:
         ["bash", "summary.sh", *args],
         cwd=str(ROOT),
         capture_output=True,
-        text=False,
+        text=True,
     )
-
-
-def out_of(result: subprocess.CompletedProcess) -> str:
-    return result.stdout.decode("utf-8")
-
-
-def err_of(result: subprocess.CompletedProcess) -> str:
-    return result.stderr.decode("utf-8")
-
-
-def write_csv(directory: str, name: str, rows: Sequence[Sequence[str]]) -> Path:
-    path = Path(directory) / name
-    path.write_text(
-        "".join(",".join(row) + "\n" for row in rows), encoding="utf-8"
-    )
-    return path
 
 
 def report_lines(text: str) -> List[str]:
-    assert text.endswith("\n"), f"report does not end with a newline: {text!r}"
+    assert text.endswith("\n"), "report does not end with a newline: %r" % text
     return text.splitlines()
 
 
-def region_lines(text: str) -> List[str]:
-    return [
-        line
-        for line in report_lines(text)
-        if not line.startswith("TOTAL ") and not line.startswith("SKIPPED ")
-    ]
+def suite_lines(text: str) -> List[str]:
+    lines = report_lines(text)
+    return lines[:-1]
 
 
-# --- REQ-003: the declared sample ------------------------------------------
+def total_line(text: str) -> str:
+    lines = report_lines(text)
+    return lines[-1]
 
 
-def test_declared_sample_without_a_header_produces_the_required_report() -> None:
-    # The requirement's own sample has no header row, so the tool must accept
-    # a headered file and this headerless one with the same report.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(tmp, "sample.csv", DECLARED_SAMPLE)
+def parse_total(text: str) -> Tuple[int, int]:
+    match = re.fullmatch(r"TOTAL (\d+) (\d+)", total_line(text))
+    assert match is not None, "bad TOTAL line: %r" % total_line(text)
+    return int(match.group(1)), int(match.group(2))
+
+
+def test_declared_sample_with_header_produces_the_required_report() -> None:
+    result = run_tool(str(ROOT / "sample" / "suites.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == BASIC_REPORT
+    assert result.stderr == ""
+
+
+def test_declared_headerless_sample_is_accepted() -> None:
+    # The requirement's declared sample has no header line; the delivery
+    # pipeline writes exactly those records, so the first data row must work.
+    result = run_tool(str(FIXTURES / "headerless.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == BASIC_REPORT
+
+
+def test_header_only_file_prints_only_total() -> None:
+    result = run_tool(str(FIXTURES / "header_only.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "TOTAL 0 0\n"
+
+
+def test_header_only_file_with_blank_lines_prints_only_total() -> None:
+    result = run_tool(str(FIXTURES / "header_only_blank.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "TOTAL 0 0\n"
+
+
+def test_empty_file_is_an_empty_report() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "empty.csv"
+        path.write_text("", encoding="utf-8")
         result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "TOTAL 0 0\n"
 
 
-def test_sample_with_a_header_produces_the_same_report() -> None:
-    rows = [("region", "amount"), *DECLARED_SAMPLE]
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(tmp, "sample.csv", rows)
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
+def test_header_text_is_never_emitted_as_a_suite_line() -> None:
+    result = run_tool(str(FIXTURES / "basic.csv"))
+    assert result.returncode == 0, result.stderr
+    assert "suite" not in result.stdout
+    assert all(not line.startswith("suite ") for line in report_lines(result.stdout))
 
 
-def test_shipped_sample_file_is_the_declared_sample() -> None:
-    result = run_tool("sample/sales.csv")
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
+def test_three_valid_records_produce_three_suite_lines() -> None:
+    result = run_tool(str(FIXTURES / "basic.csv"))
+    assert result.returncode == 0, result.stderr
+    assert len(suite_lines(result.stdout)) == 3
 
 
-def test_per_region_count_sum_and_mean_are_printed() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "mixed.csv",
-            [
-                ("region", "amount"),
-                ("North", "120.50"),
-                ("North", "99.50"),
-                ("South", "80.25"),
-            ],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert "North 2 220.00 110.00\n" in out_of(result), out_of(result)
-    assert "South 1 80.25 80.25\n" in out_of(result), out_of(result)
+def test_two_thirds_rounds_half_up_to_66_7() -> None:
+    result = run_tool(str(FIXTURES / "rounding.csv"))
+    assert result.returncode == 0, result.stderr
+    assert "two_thirds 2 3 66.7" in report_lines(result.stdout)
+    assert "two_thirds 2 3 66.6" not in report_lines(result.stdout)
 
 
-def test_region_lines_are_sorted_lexicographically_and_unique() -> None:
-    result = run_tool(str(FIXTURES / "sorting.csv"))
-    assert result.returncode == 0, err_of(result)
-    lines = region_lines(out_of(result))
-    assert lines == [
-        "Beta 1 3.00 3.00",
-        "Zed 1 1.00 1.00",
-        "alpha 1 2.00 2.00",
-    ], lines
-    names = [line.split(" ", 1)[0] for line in lines]
-    assert names == sorted(names), names
-    assert len(names) == len(set(names)), names
+def test_an_exact_half_rounds_away_from_zero() -> None:
+    result = run_tool(str(FIXTURES / "rounding.csv"))
+    assert result.returncode == 0, result.stderr
+    assert "exact_half 1 16 6.3" in report_lines(result.stdout)
+    assert "below_half 1 32 3.1" in report_lines(result.stdout)
+    assert "eighth 1 8 12.5" in report_lines(result.stdout)
 
 
-def test_region_line_count_equals_distinct_regions() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert len(region_lines(out_of(result))) == 3, out_of(result)
-
-
-def test_region_line_has_exactly_four_fields_in_the_declared_shape() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    for line in region_lines(out_of(result)):
+def test_every_percentage_has_exactly_one_decimal_place() -> None:
+    result = run_tool(str(FIXTURES / "rounding.csv"))
+    assert result.returncode == 0, result.stderr
+    for line in suite_lines(result.stdout):
         fields = line.split(" ")
         assert len(fields) == 4, line
-        region, count, total, mean = fields
-        assert region != "", line
-        assert count.isdigit(), line
-        assert _is_two_decimal(total), line
-        assert _is_two_decimal(mean), line
+        assert PERCENTAGE.match(fields[3]), line
 
 
-def _is_two_decimal(text: str) -> bool:
-    whole, dot, fraction = text.partition(".")
-    return (
-        dot == "."
-        and len(fraction) == 2
-        and fraction.isdigit()
-        and whole.lstrip("-").isdigit()
-    )
-
-
-# --- REQ-002: header handling ----------------------------------------------
-
-
-def test_columns_are_located_by_header_name_not_position() -> None:
-    result = run_tool(str(FIXTURES / "reordered.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
-
-
-def test_reordered_header_matches_the_region_amount_header_byte_for_byte() -> None:
-    # REQ-002: `amount,region` and `region,amount` produce the same report.
-    with tempfile.TemporaryDirectory() as tmp:
-        canonical = write_csv(
-            tmp, "canonical.csv", [("region", "amount"), *DECLARED_SAMPLE]
-        )
-        reordered = write_csv(
-            tmp,
-            "reordered.csv",
-            [("amount", "region"), *[(amount, region) for region, amount in DECLARED_SAMPLE]],
-        )
-        canonical_result = run_tool(str(canonical))
-        reordered_result = run_tool(str(reordered))
-    assert canonical_result.returncode == 0, err_of(canonical_result)
-    assert reordered_result.returncode == 0, err_of(reordered_result)
-    assert out_of(canonical_result) == SAMPLE_REPORT, out_of(canonical_result)
-    assert reordered_result.stdout == canonical_result.stdout, (
-        canonical_result.stdout,
-        reordered_result.stdout,
-    )
-
-
-def test_extra_columns_do_not_change_the_numbers() -> None:
-    result = run_tool(str(FIXTURES / "extra_column.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
-
-
-def test_extra_columns_in_any_order_do_not_change_the_numbers() -> None:
-    # REQ-002: the named columns are found wherever they sit; a leading extra
-    # column and a trailing extra column are both irrelevant.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "extra.csv",
-            [("channel", "amount", "region", "order")]
-            + [("web", amount, region, "A1") for region, amount in DECLARED_SAMPLE],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
-
-
-def test_blank_lines_are_neither_records_nor_skipped_rows() -> None:
-    result = run_tool(str(FIXTURES / "blank_lines.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
-
-
-def test_blank_lines_around_the_declared_sample_do_not_change_the_report() -> None:
-    # REQ-002: blank and whitespace-only lines are ignored wherever they occur.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "blanks.csv"
-        path.write_text(
-            "\n".join(
-                [
-                    "region,amount",
-                    "",
-                    "North,120.50",
-                    "",
-                    "   ",
-                    "South,80.25",
-                    "North,99.50",
-                    "",
-                    "East,45.00",
-                    "",
-                    "",
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == SAMPLE_REPORT, out_of(result)
-
-
-def test_region_and_amount_are_trimmed_but_the_region_name_keeps_its_case() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "spaces.csv",
-            [("region", "amount"), ("  North  ", " 120.50 ")],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "North 1 120.50 120.50\nTOTAL 1 120.50\nSKIPPED 0\n"
-    ), out_of(result)
-
-
-# --- REQ-004: the TOTAL line ------------------------------------------------
-
-
-def test_total_line_is_printed_exactly_once_after_the_region_lines() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    lines = report_lines(out_of(result))
-    totals = [line for line in lines if line.startswith("TOTAL ")]
-    assert totals == ["TOTAL 4 345.25"], totals
-    assert lines.index(totals[0]) > len(region_lines(out_of(result))) - 1
-    assert lines[-2] == totals[0], lines
-
-
-def test_total_line_carries_only_count_and_sum() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    total = report_lines(out_of(result))[-2]
-    assert total == "TOTAL 4 345.25", total
-    assert len(total.split(" ")) == 3, total
-
-
-def test_total_count_and_sum_are_additive_over_the_region_lines() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    lines = report_lines(out_of(result))
-    regions = region_lines(out_of(result))
-    total_count = sum(int(line.split(" ")[1]) for line in regions)
-    total_sum = sum(Decimal(line.split(" ")[2]) for line in regions)
-    assert lines[-2] == f"TOTAL {total_count} {total_sum:.2f}", lines
-
-
-# --- REQ-005: the SKIPPED line ---------------------------------------------
-
-
-def test_skipped_line_is_always_last_and_zero_for_a_clean_file() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    lines = report_lines(out_of(result))
-    assert lines[-1] == "SKIPPED 0", lines
-    assert sum(1 for line in lines if line.startswith("SKIPPED ")) == 1, lines
-
-
-def test_malformed_rows_are_skipped_counted_and_excluded_from_totals() -> None:
-    result = run_tool(str(FIXTURES / "malformed.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "North 1 120.50 120.50\n"
-        "West 1 10.00 10.00\n"
-        "TOTAL 2 130.50\n"
-        "SKIPPED 3\n"
-    ), out_of(result)
-
-
-def test_two_malformed_rows_are_counted_as_two() -> None:
-    # REQ-005: neither rejected row (the bad amount and the missing amount)
-    # may reach any aggregate, and the final line is exactly `SKIPPED 2`.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "two_bad.csv",
-            [
-                ("region", "amount"),
-                ("North", "not-a-number"),
-                ("North", "10.00"),
-                ("South", ""),
-            ],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "North 1 10.00 10.00\nTOTAL 1 10.00\nSKIPPED 2\n"
-    ), out_of(result)
-
-
-def test_missing_amount_field_is_skipped_and_counted() -> None:
-    # AMB-001 (skip-count): a row whose amount field is absent is unusable.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "missing_amount.csv",
-            [("region", "amount"), ("North", ""), ("North", "10.00")],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "North 1 10.00 10.00\nTOTAL 1 10.00\nSKIPPED 1\n"
-    ), out_of(result)
-
-# --- AMB-001: malformed rows ------------------------------------------------
-
-
-def test_short_row_is_skipped_and_counted() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp, "short.csv", [("region", "amount"), ("North",), ("South", "5.00")]
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "South 1 5.00 5.00\nTOTAL 1 5.00\nSKIPPED 1\n", out_of(result)
-
-
-def test_empty_region_is_skipped_and_counted() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "empty_region.csv",
-            [("region", "amount"), ("", "5.00"), ("South", "5.00")],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "South 1 5.00 5.00\nTOTAL 1 5.00\nSKIPPED 1\n", out_of(result)
-
-
-# --- AMB-002: repeated rows -------------------------------------------------
-
-
-def test_identical_rows_are_merged_into_the_aggregates() -> None:
+def test_duplicate_suites_merge_in_first_appearance_order() -> None:
     result = run_tool(str(FIXTURES / "duplicates.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "North 2 241.00 120.50\n"
-        "TOTAL 2 241.00\n"
-        "SKIPPED 0\n"
-    ), out_of(result)
-
-
-# --- AMB-003: rounding ------------------------------------------------------
-
-
-def test_mean_with_more_than_two_decimals_rounds_half_up() -> None:
-    # 345.25 / 4 == 86.3125 -> 86.31; a truncating tool would agree here.
-    result = run_tool(str(FIXTURES / "rounding.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "Central 4 345.25 86.31\nTOTAL 4 345.25\nSKIPPED 0\n"
-    ), out_of(result)
-
-
-def test_mean_at_an_exact_half_rounds_away_from_zero() -> None:
-    # 20.01 / 2 == 10.005 -> half-up 10.01; truncation would print 10.00.
-    result = run_tool(str(FIXTURES / "half_up.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "Tie 2 20.01 10.01\nTOTAL 2 20.01\nSKIPPED 0\n"
-    ), out_of(result)
-
-
-def test_whole_number_mean_is_printed_with_two_decimals() -> None:
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert "North 2 220.00 110.00" in out_of(result), out_of(result)
-
-
-def test_zero_amount_is_formatted_as_two_decimals() -> None:
-    result = run_tool(str(FIXTURES / "zero.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "Zero 1 0.00 0.00\nTOTAL 1 0.00\nSKIPPED 0\n", out_of(result)
-
-
-def test_large_amounts_have_no_thousands_separator_or_currency_symbol() -> None:
-    # REQ-006: sums and means are plain two-decimal numbers.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "large.csv",
-            [("region", "amount"), ("Big", "1234567.891"), ("Big", "0.009")],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "Big 2 1234567.90 617283.95\nTOTAL 2 1234567.90\nSKIPPED 0\n"
-    ), out_of(result)
-    assert "," not in out_of(result), out_of(result)
-    assert "$" not in out_of(result), out_of(result)
-
-
-def test_counts_and_skipped_count_are_plain_integers() -> None:
-    # REQ-006: counts are integers, never two-decimal amounts.
-    result = run_tool(str(FIXTURES / "malformed.csv"))
-    assert result.returncode == 0, err_of(result)
-    lines = report_lines(out_of(result))
-    counts = [line.split(" ")[1] for line in region_lines(out_of(result))]
-    counts += [lines[-2].split(" ")[1], lines[-1].split(" ")[1]]
-    for count in counts:
-        assert count.isdigit(), count
-        assert str(int(count)) == count, count
-
-
-# --- AMB-004: negative amounts ---------------------------------------------
-
-
-def test_negative_amount_is_included_as_a_refund() -> None:
-    result = run_tool(str(FIXTURES / "negative.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "North 2 75.00 37.50\nTOTAL 2 75.00\nSKIPPED 0\n"
-    ), out_of(result)
-
-
-def test_negative_half_mean_rounds_away_from_zero() -> None:
-    # AMB-004 (include) + AMB-003 (half-up): -20.01 / 2 == -10.005, which
-    # rounds away from zero to -10.01, not toward zero to -10.00.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp,
-            "refund_tie.csv",
-            [("region", "amount"), ("Refund", "-20.01"), ("Refund", "0.00")],
-        )
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == (
-        "Refund 2 -20.01 -10.01\nTOTAL 2 -20.01\nSKIPPED 0\n"
-    ), out_of(result)
-
-
-# --- REQ-008: row-order invariance -----------------------------------------
-
-
-def test_shuffling_data_rows_does_not_change_stdout_bytes() -> None:
-    rows = list(DECLARED_SAMPLE)
-    with tempfile.TemporaryDirectory() as tmp:
-        ordered = write_csv(tmp, "ordered.csv", [("region", "amount"), *rows])
-        baseline = run_tool(str(ordered))
-        assert baseline.returncode == 0, err_of(baseline)
-        random.Random(20261108).shuffle(rows)
-        shuffled = write_csv(tmp, "shuffled.csv", [("region", "amount"), *rows])
-        shuffled_result = run_tool(str(shuffled))
-    assert shuffled_result.returncode == 0, err_of(shuffled_result)
-    assert shuffled_result.stdout == baseline.stdout, (
-        baseline.stdout,
-        shuffled_result.stdout,
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "api 7 15 46.7\n"
+        "web 5 10 50.0\n"
+        "TOTAL 12 25\n"
     )
 
 
-def test_repeated_runs_are_byte_identical() -> None:
-    first = run_tool(str(FIXTURES / "mixed.csv"))
-    second = run_tool(str(FIXTURES / "mixed.csv"))
-    assert first.returncode == 0 and second.returncode == 0
-    assert first.stdout == second.stdout
+def test_zero_total_suite_prints_zero_point_zero() -> None:
+    result = run_tool(str(FIXTURES / "zero_total.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "empty 0 0 0.0\n"
+        "ok 1 2 50.0\n"
+        "TOTAL 1 2\n"
+    )
 
 
-def test_input_file_is_not_modified() -> None:
-    before = (FIXTURES / "mixed.csv").read_bytes()
-    result = run_tool(str(FIXTURES / "mixed.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert (FIXTURES / "mixed.csv").read_bytes() == before
+def test_total_line_is_last_and_sum_of_printed_suite_lines() -> None:
+    for name in ("basic.csv", "duplicates.csv", "rounding.csv", "zero_total.csv"):
+        result = run_tool(str(FIXTURES / name))
+        assert result.returncode == 0, result.stderr
+        lines = report_lines(result.stdout)
+        assert len(total_line(result.stdout).split(" ")) == 3
+        passed_sum = 0
+        total_sum = 0
+        for line in lines[:-1]:
+            fields = line.split(" ")
+            assert len(fields) == 4, line
+            passed_sum += int(fields[1])
+            total_sum += int(fields[2])
+        assert parse_total(result.stdout) == (passed_sum, total_sum), name
 
 
-# --- REQ-009: empty report --------------------------------------------------
+def test_no_line_contains_a_percent_sign() -> None:
+    for name in ("basic.csv", "rounding.csv", "duplicates.csv"):
+        result = run_tool(str(FIXTURES / name))
+        assert result.returncode == 0, result.stderr
+        assert "%" not in result.stdout
 
 
-def test_header_only_file_prints_only_total_and_skipped() -> None:
-    result = run_tool(str(FIXTURES / "header_only.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "TOTAL 0 0.00\nSKIPPED 0\n", out_of(result)
+def test_blank_lines_are_ignored() -> None:
+    result = run_tool(str(FIXTURES / "blank_lines.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "login 45 50 90.0\n"
+        "search 19 20 95.0\n"
+        "TOTAL 64 70\n"
+    )
 
 
-def test_header_only_file_with_blank_lines_is_an_empty_report() -> None:
-    result = run_tool(str(FIXTURES / "header_only_blank.csv"))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "TOTAL 0 0.00\nSKIPPED 0\n", out_of(result)
+def test_surrounding_whitespace_on_fields_is_ignored() -> None:
+    result = run_tool(str(FIXTURES / "whitespace.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "login 45 50 90.0\n"
+        "search 19 20 95.0\n"
+        "TOTAL 64 70\n"
+    )
 
 
-def test_empty_file_is_a_valid_empty_report() -> None:
-    # REQ-001: a readable file exits 0 and prints the report; with no records
-    # that report is the empty one.
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "empty.csv"
-        path.write_bytes(b"")
+def test_a_reordered_header_is_resolved_by_name() -> None:
+    result = run_tool(str(FIXTURES / "reordered.csv"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "login 45 50 90.0\n"
+        "search 19 20 95.0\n"
+        "TOTAL 64 70\n"
+    )
+
+
+def test_crlf_input_is_accepted() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "crlf.csv"
+        path.write_bytes(
+            b"suite,passed,total\r\nlogin,45,50\r\nsearch,19,20\r\nbilling,7,8\r\n"
+        )
         result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "TOTAL 0 0.00\nSKIPPED 0\n", out_of(result)
-
-
-def test_blank_only_file_is_a_valid_empty_report() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "blank.csv"
-        path.write_bytes(b"\n\n   \n")
-        result = run_tool(str(path))
-    assert result.returncode == 0, err_of(result)
-    assert out_of(result) == "TOTAL 0 0.00\nSKIPPED 0\n", out_of(result)
-
-
-# --- REQ-001: errors --------------------------------------------------------
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == BASIC_REPORT
 
 
 def test_missing_argument_is_a_usage_error() -> None:
     result = run_tool()
-    assert result.returncode != 0, result.returncode
-    assert result.stdout == b"", result.stdout
-    assert err_of(result).strip() != "", err_of(result)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert result.stderr.strip() != ""
 
 
-def test_unreadable_path_is_an_error_with_no_partial_report() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        missing = str(Path(tmp) / "does-not-exist.csv")
-        result = run_tool(missing)
-    assert result.returncode != 0, result.returncode
-    assert result.stdout == b"", result.stdout
-    assert err_of(result).strip() != "", err_of(result)
+def test_nonexistent_file_is_an_error() -> None:
+    result = run_tool(str(ROOT / "does-not-exist.csv"))
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert result.stderr.strip() != ""
 
 
-def test_directory_path_is_an_error_with_no_partial_report() -> None:
-    # REQ-001: a path that cannot be read as a file is a diagnostic, not a
-    # traceback and not a partial report.
-    result = run_tool(str(FIXTURES))
-    assert result.returncode != 0, result.returncode
-    assert result.stdout == b"", result.stdout
-    assert err_of(result).strip() != "", err_of(result)
+def test_directory_path_is_an_error() -> None:
+    result = run_tool(str(ROOT))
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert result.stderr.strip() != ""
 
 
-def test_header_without_the_amount_column_stops_the_run() -> None:
-    result = run_tool(str(FIXTURES / "bad_header.csv"))
-    assert result.returncode != 0, result.returncode
-    assert result.stdout == b"", result.stdout
-    assert "amount" in err_of(result), err_of(result)
+def test_malformed_rows_stop_with_a_nonzero_exit_and_name_the_line() -> None:
+    names = (
+        "malformed_fields.csv",
+        "malformed_noninteger.csv",
+        "malformed_negative.csv",
+        "malformed_passed_gt_total.csv",
+    )
+    for name in names:
+        result = run_tool(str(FIXTURES / name))
+        assert result.returncode != 0, name
+        assert result.stdout == "", name
+        assert "line 3" in result.stderr, (name, result.stderr)
 
 
-def test_header_without_the_region_column_stops_the_run() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_csv(
-            tmp, "bad_header.csv", [("amount", "channel"), ("1.00", "web")]
-        )
-        result = run_tool(str(path))
-    assert result.returncode != 0, result.returncode
-    assert result.stdout == b"", result.stdout
-    assert "region" in err_of(result), err_of(result)
+def test_a_late_malformed_row_leaves_no_partial_report() -> None:
+    result = run_tool(str(FIXTURES / "malformed_fields.csv"))
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
-TESTS = [
-    test_declared_sample_without_a_header_produces_the_required_report,
-    test_sample_with_a_header_produces_the_same_report,
-    test_shipped_sample_file_is_the_declared_sample,
-    test_per_region_count_sum_and_mean_are_printed,
-    test_region_lines_are_sorted_lexicographically_and_unique,
-    test_region_line_count_equals_distinct_regions,
-    test_region_line_has_exactly_four_fields_in_the_declared_shape,
-    test_columns_are_located_by_header_name_not_position,
-    test_reordered_header_matches_the_region_amount_header_byte_for_byte,
-    test_extra_columns_do_not_change_the_numbers,
-    test_extra_columns_in_any_order_do_not_change_the_numbers,
-    test_blank_lines_are_neither_records_nor_skipped_rows,
-    test_blank_lines_around_the_declared_sample_do_not_change_the_report,
-    test_region_and_amount_are_trimmed_but_the_region_name_keeps_its_case,
-    test_total_line_is_printed_exactly_once_after_the_region_lines,
-    test_total_line_carries_only_count_and_sum,
-    test_total_count_and_sum_are_additive_over_the_region_lines,
-    test_skipped_line_is_always_last_and_zero_for_a_clean_file,
-    test_malformed_rows_are_skipped_counted_and_excluded_from_totals,
-    test_two_malformed_rows_are_counted_as_two,
-    test_missing_amount_field_is_skipped_and_counted,
-    test_short_row_is_skipped_and_counted,
-    test_empty_region_is_skipped_and_counted,
-    test_identical_rows_are_merged_into_the_aggregates,
-    test_mean_with_more_than_two_decimals_rounds_half_up,
-    test_mean_at_an_exact_half_rounds_away_from_zero,
-    test_whole_number_mean_is_printed_with_two_decimals,
-    test_zero_amount_is_formatted_as_two_decimals,
-    test_large_amounts_have_no_thousands_separator_or_currency_symbol,
-    test_counts_and_skipped_count_are_plain_integers,
-    test_negative_amount_is_included_as_a_refund,
-    test_negative_half_mean_rounds_away_from_zero,
-    test_shuffling_data_rows_does_not_change_stdout_bytes,
-    test_repeated_runs_are_byte_identical,
-    test_input_file_is_not_modified,
-    test_header_only_file_prints_only_total_and_skipped,
-    test_header_only_file_with_blank_lines_is_an_empty_report,
-    test_empty_file_is_a_valid_empty_report,
-    test_blank_only_file_is_a_valid_empty_report,
+def test_input_file_is_not_modified() -> None:
+    path = FIXTURES / "basic.csv"
+    before = path.read_bytes()
+    result = run_tool(str(path))
+    assert result.returncode == 0, result.stderr
+    assert path.read_bytes() == before
+
+
+TESTS: Sequence = (
+    test_declared_sample_with_header_produces_the_required_report,
+    test_declared_headerless_sample_is_accepted,
+    test_header_only_file_prints_only_total,
+    test_header_only_file_with_blank_lines_prints_only_total,
+    test_empty_file_is_an_empty_report,
+    test_header_text_is_never_emitted_as_a_suite_line,
+    test_three_valid_records_produce_three_suite_lines,
+    test_two_thirds_rounds_half_up_to_66_7,
+    test_an_exact_half_rounds_away_from_zero,
+    test_every_percentage_has_exactly_one_decimal_place,
+    test_duplicate_suites_merge_in_first_appearance_order,
+    test_zero_total_suite_prints_zero_point_zero,
+    test_total_line_is_last_and_sum_of_printed_suite_lines,
+    test_no_line_contains_a_percent_sign,
+    test_blank_lines_are_ignored,
+    test_surrounding_whitespace_on_fields_is_ignored,
+    test_a_reordered_header_is_resolved_by_name,
+    test_crlf_input_is_accepted,
     test_missing_argument_is_a_usage_error,
-    test_unreadable_path_is_an_error_with_no_partial_report,
-    test_directory_path_is_an_error_with_no_partial_report,
-    test_header_without_the_amount_column_stops_the_run,
-    test_header_without_the_region_column_stops_the_run,
-]
+    test_nonexistent_file_is_an_error,
+    test_directory_path_is_an_error,
+    test_malformed_rows_stop_with_a_nonzero_exit_and_name_the_line,
+    test_a_late_malformed_row_leaves_no_partial_report,
+    test_input_file_is_not_modified,
+)
 
 
 if __name__ == "__main__":
-    sys.exit(run_tests(TESTS, "reports/tests.tap"))
+    raise SystemExit(run_tests(TESTS, "reports/tests.tap"))
